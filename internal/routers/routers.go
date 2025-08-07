@@ -2,7 +2,6 @@ package routers
 
 import (
 	"dachuang/internal/Controllers/admin"
-	"dachuang/internal/config"
 	"dachuang/internal/models"
 
 	"github.com/gin-gonic/gin"
@@ -12,7 +11,7 @@ func RoutersInit(r *gin.Engine) {
 	// 用户相关路由
 	userRouter := r.Group("/user")
 	{
-		userCtrl := admin.NewUserController(models.DB, config.GlobalConfig.Judge.APIURL)
+		userCtrl := admin.NewUserController(models.DB)
 		userRouter.GET("/", userCtrl.Index)
 		userRouter.POST("/login", userCtrl.Login)
 		userRouter.POST("/register", userCtrl.Register)
@@ -54,7 +53,7 @@ func RoutersInit(r *gin.Engine) {
 	// 提交相关路由
 	submissionRouter := r.Group("/submission")
 	{
-		userCtrl := admin.NewUserController(models.DB, config.GlobalConfig.Judge.APIURL)
+		userCtrl := admin.NewUserController(models.DB)
 		submissionRouter.POST("/", userCtrl.SubmitCode)
 		submissionRouter.GET("/:id", userCtrl.GetSubmissionResult)
 	}

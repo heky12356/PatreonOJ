@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"dachuang/internal/config"
@@ -15,17 +17,27 @@ import (
 )
 
 type JudgeService struct {
-	JudgeAPI   string       // 评测系统API地址
-	DB         *gorm.DB     // 数据库连接
-	HTTPClient *http.Client // HTTP客户端
+	JudgeAPI          string              // 评测系统API地址
+	DB                *gorm.DB            // 数据库连接
+	HTTPClient        *http.Client        // HTTP客户端
+	LocalJudgeService *LocalJudgeService  // 本地评测服务
+	Config            *config.JudgeConfig // 评测配置
 }
 
 // NewJudgeService 创建评测服务实例
-func NewJudgeService(api string, db *gorm.DB) *JudgeService {
-	timeout := time.Duration(config.GlobalConfig.Judge.Timeout) * time.Second
+func NewJudgeService(cfg *config.JudgeConfig, db *gorm.DB) *JudgeService {
+	timeout := time.Duration(cfg.Timeout) * time.Second
+
+	var localJudge *LocalJudgeService
+	if cfg.Mode == "local" && cfg.Local.Enabled {
+		localJudge = NewLocalJudgeService(&cfg.Local)
+	}
+
 	return &JudgeService{
-		JudgeAPI: api,
-		DB:       db,
+		JudgeAPI:          cfg.APIURL,
+		DB:                db,
+		Config:            cfg,
+		LocalJudgeService: localJudge,
 		HTTPClient: &http.Client{
 			Timeout: timeout,
 		},
@@ -51,6 +63,8 @@ func (js *JudgeService) JudgeCode(submission *models.Submission) error {
 		return fmt.Errorf("更新提交状态失败: %w", err)
 	}
 
+	log.Print("debug")
+
 	// 4. 执行评测
 	results, err := js.executeJudgement(submission.Code, testCases)
 	if err != nil {
@@ -74,6 +88,56 @@ func (js *JudgeService) JudgeCode(submission *models.Submission) error {
 
 // executeJudgement 执行实际评测逻辑
 func (js *JudgeService) executeJudgement(code string, testCases []models.TestCase) ([]models.TestCaseResult, error) {
+	// 根据配置选择评测方式
+	if js.Config.Mode == "local" && js.LocalJudgeService != nil {
+		// 本地评测
+		log.Printf("Local judge mode enabled")
+
+		return js.executeLocalJudgement(code, testCases)
+	} else {
+		// 远程API评测
+		return js.executeRemoteJudgement(code, testCases)
+	}
+}
+
+// executeLocalJudgement 执行本地评测
+func (js *JudgeService) executeLocalJudgement(code string, testCases []models.TestCase) ([]models.TestCaseResult, error) {
+	var results []models.TestCaseResult
+
+	// 检测编程语言（简单实现，可以根据代码内容或用户选择来确定）
+	language := js.detectLanguage(code)
+
+	log.Printf("Detected language: %s", language)
+
+	// 检查是否支持该语言
+	if !js.LocalJudgeService.IsLanguageSupported(language) {
+		return nil, fmt.Errorf("不支持的编程语言: %s", language)
+	}
+
+	for _, tc := range testCases {
+		result, err := js.LocalJudgeService.JudgeCode(code, tc.Input, language)
+		if err != nil {
+			result = &models.TestCaseResult{
+				Input:          tc.Input,
+				ExpectedOutput: tc.ExpectedOutput,
+				ActualOutput:   fmt.Sprintf("Error: %v", err),
+				IsCorrect:      false,
+				Runtime:        0,
+				MemoryUsage:    0,
+			}
+		} else {
+			result.ExpectedOutput = tc.ExpectedOutput
+			result.IsCorrect = result.ActualOutput == tc.ExpectedOutput
+		}
+
+		results = append(results, *result)
+	}
+
+	return results, nil
+}
+
+// executeRemoteJudgement 执行远程API评测
+func (js *JudgeService) executeRemoteJudgement(code string, testCases []models.TestCase) ([]models.TestCaseResult, error) {
 	var results []models.TestCaseResult
 
 	for _, tc := range testCases {
@@ -100,6 +164,23 @@ func (js *JudgeService) executeJudgement(code string, testCases []models.TestCas
 	}
 
 	return results, nil
+}
+
+// detectLanguage 检测编程语言（简单实现）
+func (js *JudgeService) detectLanguage(code string) string {
+	// 简单的语言检测逻辑，实际项目中可以更复杂
+	if strings.Contains(code, "package main") || strings.Contains(code, "func main()") {
+		return "go"
+	} else if strings.Contains(code, "def ") || strings.Contains(code, "import ") {
+		return "python"
+	} else if strings.Contains(code, "#include") || strings.Contains(code, "int main()") {
+		return "cpp"
+	} else if strings.Contains(code, "public class") || strings.Contains(code, "public static void main") {
+		return "java"
+	}
+
+	// 默认返回Go语言
+	return "go"
 }
 
 // getTestCases 获取题目测试用例

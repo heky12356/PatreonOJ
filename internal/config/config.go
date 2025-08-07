@@ -47,9 +47,21 @@ type ServerConfig struct {
 
 // JudgeConfig 评测服务配置
 type JudgeConfig struct {
-	APIURL    string `mapstructure:"api_url"`
-	Timeout   int    `mapstructure:"timeout"`
-	QueueSize int    `mapstructure:"queue_size"`
+	Mode      string           `mapstructure:"mode"`
+	APIURL    string           `mapstructure:"api_url"`
+	Timeout   int              `mapstructure:"timeout"`
+	QueueSize int              `mapstructure:"queue_size"`
+	Local     LocalJudgeConfig `mapstructure:"local"`
+}
+
+// LocalJudgeConfig 本地评测配置
+type LocalJudgeConfig struct {
+	Enabled            bool     `mapstructure:"enabled"`
+	SandboxDir         string   `mapstructure:"sandbox_dir"`
+	MaxMemory          int      `mapstructure:"max_memory"`
+	MaxTime            int      `mapstructure:"max_time"`
+	MaxOutputSize      int      `mapstructure:"max_output_size"`
+	SupportedLanguages []string `mapstructure:"supported_languages"`
 }
 
 // LogConfig 日志配置
@@ -101,8 +113,15 @@ func setDefaults() {
 	viper.SetDefault("server.mode", "debug")
 
 	// 评测服务默认配置
+	viper.SetDefault("judge.mode", "local")
 	viper.SetDefault("judge.timeout", 15)
 	viper.SetDefault("judge.queue_size", 100)
+	viper.SetDefault("judge.local.enabled", true)
+	viper.SetDefault("judge.local.sandbox_dir", "./sandbox")
+	viper.SetDefault("judge.local.max_memory", 128)
+	viper.SetDefault("judge.local.max_time", 5)
+	viper.SetDefault("judge.local.max_output_size", 1024)
+	viper.SetDefault("judge.local.supported_languages", []string{"go", "python", "cpp", "java"})
 
 	// 日志默认配置
 	viper.SetDefault("log.level", "info")

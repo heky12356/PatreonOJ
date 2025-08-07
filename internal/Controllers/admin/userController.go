@@ -100,11 +100,11 @@ type UserController struct {
 
 
 // 初始化控制器
-func NewUserController(db *gorm.DB, judgeAPI string) *UserController {
+func NewUserController(db *gorm.DB) *UserController {
     queueSize := config.GlobalConfig.Judge.QueueSize
     controller := &UserController{
         db:             db,
-        judgeService:   services.NewJudgeService(judgeAPI, db),
+        judgeService:   services.NewJudgeService(&config.GlobalConfig.Judge, db),
         submissionQueue: make(chan *models.Submission, queueSize),
     }
     
