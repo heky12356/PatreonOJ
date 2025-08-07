@@ -1,44 +1,63 @@
 package main
 
 import (
-    "html/template" 
-    "time"
-    "dachuang/routers"
-    "github.com/gin-gonic/gin"
-    
+	"html/template"
+	"log"
+	"time"
+
+	"dachuang/config"
+	"dachuang/models"
+	"dachuang/routers"
+
+	"github.com/gin-gonic/gin"
 )
 
 // UserInfo 结构体定义（当前未使用）
 type UserInfo struct {
-    Username string `json:"username" form:"username"`
-    Password string `json:"password" form:"password"`
+	Username string `json:"username" form:"username"`
+	Password string `json:"password" form:"password"`
 }
 
 // UnixToTime 将Unix时间戳转换为格式化的时间字符串
 func UnixToTime(timestamp int64) string {
-    return time.Unix(timestamp, 0).Format("2006-01-02 15:04:05")
+	return time.Unix(timestamp, 0).Format("2006-01-02 15:04:05")
 }
 
 func main() {
-    // 创建一个默认的路由引擎
-    r := gin.Default()
+	// 初始化配置
+	configPath := "./config.yaml"
+	if err := config.InitConfig(configPath); err != nil {
+		log.Fatalf("配置初始化失败: %v", err)
+	}
 
-    // 自定义模板函数 - 注意要放在加载模板前面
-    r.SetFuncMap(template.FuncMap{ // 修正：从templates.FuncMap改为template.FuncMap
-        "UnixToTime": UnixToTime,
-    })
+	// 初始化数据库
+	if err := models.InitDB(); err != nil {
+		log.Fatalf("数据库初始化失败: %v", err)
+	}
 
-    // 加载模板 - 放在配置路由前面
-    r.LoadHTMLGlob("templates/**/*")
+	// 自动迁移数据库表
+	if err := models.AutoMigrate(); err != nil {
+		log.Fatalf("数据库表迁移失败: %v", err)
+	}
 
-    // 配置静态web目录 - 第一个参数表示路由，第二个参数表示映射的目录
-    r.Static("/static", "./static")
-   
-   
+	// 设置Gin运行模式
+	gin.SetMode(config.GlobalConfig.Server.Mode)
 
+	// 创建路由引擎
+	r := gin.Default()
 
-    routers.AdminRoutersInit(r)
+	// 自定义模板函数 - 注意要放在加载模板前面
+	r.SetFuncMap(template.FuncMap{
+		"UnixToTime": UnixToTime,
+	})
 
-    
-    r.Run(":8080") 
+	// 初始化路由
+	routers.AdminRoutersInit(r)
+
+	// 启动服务器
+	serverAddr := config.GlobalConfig.GetServerAddr()
+	log.Printf("服务器启动在端口: %s", serverAddr)
+	if err := r.Run(serverAddr); err != nil {
+		log.Fatalf("服务器启动失败: %v", err)
+	}
 }

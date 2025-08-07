@@ -5,6 +5,7 @@ import (
     "encoding/hex"
     "fmt"
     "github.com/gin-gonic/gin"
+    "dachuang/config"
     "dachuang/models"
     "dachuang/services"
     "github.com/google/uuid"
@@ -53,7 +54,7 @@ type UserController struct {
 
 // 初始化控制器
 func NewUserController(db *gorm.DB, judgeAPI string) *UserController {
-    queueSize := 100
+    queueSize := config.GlobalConfig.Judge.QueueSize
     controller := &UserController{
         db:             db,
         judgeService:   services.NewJudgeService(judgeAPI, db),

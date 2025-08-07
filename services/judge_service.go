@@ -2,6 +2,7 @@ package services
 
 import (
     "bytes"
+    "dachuang/config"
     "dachuang/models"
     "encoding/json"
     "fmt"
@@ -19,11 +20,12 @@ type JudgeService struct {
 
 // NewJudgeService 创建评测服务实例
 func NewJudgeService(api string, db *gorm.DB) *JudgeService {
+    timeout := time.Duration(config.GlobalConfig.Judge.Timeout) * time.Second
     return &JudgeService{
         JudgeAPI: api,
         DB:       db,
         HTTPClient: &http.Client{
-            Timeout: 15 * time.Second, // 增加超时时间
+            Timeout: timeout,
         },
     }
 }
