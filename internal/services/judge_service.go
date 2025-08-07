@@ -96,7 +96,7 @@ func (js *JudgeService) executeJudgement(code string, testCases []models.TestCas
 }
 
 // getTestCases 获取题目测试用例
-func (js *JudgeService) getTestCases(questionID string) ([]models.TestCase, error) {
+func (js *JudgeService) getTestCases(questionID int) ([]models.TestCase, error) {
     var testCases []models.TestCase
 
     if err := js.DB.Where("question_id = ? AND is_hidden = ?", questionID, false).
@@ -105,7 +105,7 @@ func (js *JudgeService) getTestCases(questionID string) ([]models.TestCase, erro
     }
 
     if len(testCases) == 0 {
-        return nil, fmt.Errorf("题目ID %s 没有可用的测试用例", questionID)
+        return nil, fmt.Errorf("题目没有可用的测试用例")
     }
 
     return testCases, nil

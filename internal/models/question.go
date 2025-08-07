@@ -40,7 +40,7 @@ type Question struct {
 }
 type TestCase struct {
     ID             uint   `gorm:"primaryKey"`
-    QuestionID     uint   // 关联到题目
+    QuestionID     int    `json:"question_id"`  // 改为int类型，与Question.Id匹配
     Input          string `gorm:"type:text"`
     ExpectedOutput string `gorm:"type:text"`
     IsHidden       bool   // 是否隐藏测试用例

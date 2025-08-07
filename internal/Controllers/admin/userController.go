@@ -39,9 +39,9 @@ type LogoutRequest struct {
 }
 
 type SubmitRequest struct {
-    UserID     string `json:"user_id" binding:"required"`
-    QuestionID string `json:"question_id" binding:"required"`
-    Code       string `json:"code" binding:"required"`
+    UserID         string `json:"user_id" binding:"required"`
+    QuestionNumber int    `json:"question_number" binding:"required"`  // 改为题目编号
+    Code           string `json:"code" binding:"required"`
 }
 
 type UserController struct {
@@ -208,34 +208,39 @@ func (uc *UserController) SubmitCode(c *gin.Context) {
         return
     }
 
+    // 验证用户是否存在
     var user models.User
     if err := uc.db.Where("uuid = ?", submitRequest.UserID).First(&user).Error; err != nil {
         c.JSON(http.StatusNotFound, gin.H{"error": "用户不存在"})
         return
     }
 
+    // 通过题目编号查找题目
     var question models.Question
-    if err := uc.db.Where("uuid = ?", submitRequest.QuestionID).First(&question).Error; err != nil {
+    if err := uc.db.Where("question_number = ?", submitRequest.QuestionNumber).First(&question).Error; err != nil {
         c.JSON(http.StatusNotFound, gin.H{"error": "题目不存在"})
         return
     }
 
-    submission := models.NewSubmission(submitRequest.UserID, submitRequest.QuestionID, submitRequest.Code)
+    // 创建提交记录，使用题目的数据库ID
+    submission := models.NewSubmission(submitRequest.UserID, question.Id, submitRequest.Code)
 
     if err := uc.db.Create(submission).Error; err != nil {
         c.JSON(http.StatusInternalServerError, gin.H{"error": "提交创建失败"})
         return
     }
 
+    // 将提交加入评测队列
     uc.submissionQueue <- submission
 
     c.JSON(http.StatusOK, gin.H{
-        "submission_id": submission.ID,
-        "user_id":      submission.UserID,
-        "question_id":  submission.QuestionID,
-        "status":      submission.Status,
-        "message":     "代码已提交，正在评测中",
-        "created_at":  submission.CreatedAt,
+        "submission_id":   submission.ID,
+        "user_id":        submission.UserID,
+        "question_number": submitRequest.QuestionNumber,  // 返回题目编号
+        "question_id":    submission.QuestionID,         // 返回内部ID
+        "status":         submission.Status,
+        "message":        "代码已提交，正在评测中",
+        "created_at":     submission.CreatedAt,
     })
 }
 
