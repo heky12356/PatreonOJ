@@ -12,9 +12,11 @@ type Submission struct {
     QuestionID int       `json:"question_id"`  // 改为int类型，存储题目的数据库ID
     Code       string    `json:"code" gorm:"type:text"`
     Status     string    `json:"status"`
-    Results    []TestCaseResult `json:"results" gorm:"type:json"`
-    CreatedAt  time.Time `json:"created_at"`  // 标准GORM创建时间字段
-    UpdatedAt  time.Time `json:"updated_at"`  // 标准GORM更新时间字段
+    Results    string    `json:"results" gorm:"type:text"`  // 改为string类型，存储JSON字符串
+    ErrorCode  string    `json:"error_code"`               // 错误码
+    ErrorMsg   string    `json:"error_msg"`                // 错误信息
+    CreatedAt  time.Time `json:"created_at"`               // 标准GORM创建时间字段
+    UpdatedAt  time.Time `json:"updated_at"`               // 标准GORM更新时间字段
 }
 type TestCaseResult struct {
     Input          string `json:"input"`
@@ -32,5 +34,8 @@ func NewSubmission(userID string, questionID int, code string) *Submission {
         QuestionID: questionID,  // 现在接收int类型的题目ID
         Code:       code,
         Status:     "pending",
+        Results:    "",          // 初始化为空字符串
+        ErrorCode:  "",          // 初始化为空
+        ErrorMsg:   "",          // 初始化为空
     }
 }

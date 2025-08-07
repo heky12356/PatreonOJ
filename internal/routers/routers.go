@@ -25,7 +25,7 @@ func RoutersInit(r *gin.Engine) {
 		questionCtrl := &admin.QuestionController{}
 		questionRouter.GET("/", questionCtrl.Index)
 		questionRouter.POST("/", questionCtrl.Store)
-		questionRouter.POST("/:id", questionCtrl.Update)
+		questionRouter.POST("/:number", questionCtrl.Update)  // 改为使用题目编号
 	}
 
 	// 分类相关路由
@@ -57,5 +57,18 @@ func RoutersInit(r *gin.Engine) {
 		userCtrl := admin.NewUserController(models.DB, config.GlobalConfig.Judge.APIURL)
 		submissionRouter.POST("/", userCtrl.SubmitCode)
 		submissionRouter.GET("/:id", userCtrl.GetSubmissionResult)
+	}
+
+	// 测试用例相关路由
+	testCaseRouter := r.Group("/testcase")
+	{
+		testCaseCtrl := &admin.TestCaseController{}
+		testCaseRouter.GET("/", testCaseCtrl.Index)                    // 获取测试用例列表
+		testCaseRouter.GET("/question/:number", testCaseCtrl.GetByQuestion) // 根据题目编号获取测试用例
+		testCaseRouter.GET("/:id", testCaseCtrl.Show)                  // 获取单个测试用例详情
+		testCaseRouter.POST("/", testCaseCtrl.Store)                   // 添加单个测试用例
+		testCaseRouter.POST("/batch", testCaseCtrl.BatchStore)         // 批量添加测试用例
+		testCaseRouter.PUT("/:id", testCaseCtrl.Update)               // 更新测试用例
+		testCaseRouter.DELETE("/:id", testCaseCtrl.Delete)            // 删除测试用例
 	}
 }

@@ -1,21 +1,68 @@
 package admin
 
 import (
-    "crypto/md5"
-    "encoding/hex"
-    "fmt"
-    "github.com/gin-gonic/gin"
-    "dachuang/internal/config"
-    "dachuang/internal/models"
-    "dachuang/internal/services"
-    "github.com/google/uuid"
-    "gorm.io/gorm"
-    "log"
-    "net/http"
-    
+	"crypto/md5"
+	"dachuang/internal/config"
+	"dachuang/internal/models"
+	"dachuang/internal/services"
+	"encoding/hex"
+	"encoding/json"
+	"log"
+	"net/http"
+	"strings"
+
+	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 // MD5加密函数
+// getErrorCode 根据错误信息返回对应的错误码
+func getErrorCode(err error) string {
+    errMsg := err.Error()
+    switch {
+    case strings.Contains(errMsg, "测试用例"):
+        return "E001" // 测试用例相关错误
+    case strings.Contains(errMsg, "编译"):
+        return "E002" // 编译错误
+    case strings.Contains(errMsg, "超时"):
+        return "E003" // 运行超时
+    case strings.Contains(errMsg, "内存"):
+        return "E004" // 内存超限
+    case strings.Contains(errMsg, "网络"):
+        return "E005" // 网络错误
+    default:
+        return "E999" // 未知错误
+    }
+}
+
+// parseResults 解析Results字符串为TestCaseResult数组
+func parseResults(resultsStr string) []models.TestCaseResult {
+    if resultsStr == "" {
+        return []models.TestCaseResult{}
+    }
+    
+    var results []models.TestCaseResult
+    if err := json.Unmarshal([]byte(resultsStr), &results); err != nil {
+        log.Printf("解析评测结果失败: %v", err)
+        return []models.TestCaseResult{}
+    }
+    return results
+}
+
+// serializeResults 将TestCaseResult数组序列化为JSON字符串
+func serializeResults(results []models.TestCaseResult) string {
+    if len(results) == 0 {
+        return ""
+    }
+    
+    data, err := json.Marshal(results)
+    if err != nil {
+        log.Printf("序列化评测结果失败: %v", err)
+        return ""
+    }
+    return string(data)
+}
 func md5Encode(str string) string {
     h := md5.New()
     h.Write([]byte(str))
@@ -81,13 +128,11 @@ func (uc *UserController) consumeSubmissions() {
         if err := uc.judgeService.JudgeCode(submission); err != nil {
             log.Printf("评测失败 - 提交ID: %s, 错误: %v", submission.ID, err)
             submission.Status = "error"
-            submission.Results = []models.TestCaseResult{
-                {
-                    Input:        "",
-                    ActualOutput: fmt.Sprintf("评测系统错误: %v", err),
-                    IsCorrect:    false,
-                },
-            }
+            
+            // 设置错误码和错误信息
+            submission.ErrorCode = getErrorCode(err)
+            submission.ErrorMsg = err.Error()
+            submission.Results = ""  // 清空结果
         }
         
         // 3. 保存评测结果
@@ -244,31 +289,92 @@ func (uc *UserController) SubmitCode(c *gin.Context) {
     })
 }
 
+// GetSubmissionResult 获取代码提交的评测结果
 func (uc *UserController) GetSubmissionResult(c *gin.Context) {
     submissionID := c.Param("id")
     
+    // 查询提交记录
     var submission models.Submission
     if err := uc.db.Where("id = ?", submissionID).First(&submission).Error; err != nil {
         c.JSON(http.StatusNotFound, gin.H{"error": "提交记录不存在"})
         return
     }
     
-    passCount := 0
-    for _, result := range submission.Results {
-        if result.IsCorrect {
-            passCount++
-        }
-    }
-    passRate := float64(passCount) / float64(len(submission.Results))
-    
-    c.JSON(http.StatusOK, gin.H{
+    // 构建基础响应数据
+    response := gin.H{
         "submission_id": submission.ID,
         "user_id":      submission.UserID,
         "question_id":  submission.QuestionID,
         "status":      submission.Status,
-        "results":     submission.Results,
-        "pass_rate":   passRate,
-        "created_at": submission.CreatedAt,
-        "updated_at": submission.UpdatedAt,
-    })
+        "created_at":  submission.CreatedAt,
+        "updated_at":  submission.UpdatedAt,
+    }
+    
+    // 查询题目信息以获取题目编号
+    var question models.Question
+    if err := uc.db.Where("id = ?", submission.QuestionID).First(&question).Error; err == nil {
+        response["question_number"] = question.QuestionNumber
+    }
+    
+    // 根据评测状态返回不同的数据
+    switch submission.Status {
+    case "completed":
+        // 评测完成：解析结果并计算通过率
+        results := parseResults(submission.Results)
+        if len(results) > 0 {
+            passCount := 0
+            for _, result := range results {
+                if result.IsCorrect {
+                    passCount++
+                }
+            }
+            response["results"] = results
+            response["pass_rate"] = float64(passCount) / float64(len(results))
+            response["total_cases"] = len(results)
+            response["passed_cases"] = passCount
+        } else {
+            // 评测完成但无结果（异常情况）
+            response["results"] = []models.TestCaseResult{}
+            response["pass_rate"] = 0.0
+            response["total_cases"] = 0
+            response["passed_cases"] = 0
+            response["message"] = "评测完成但无测试结果"
+        }
+    case "processing":
+        // 评测中：返回处理状态
+        response["results"] = []models.TestCaseResult{}
+        response["message"] = "代码正在评测中，请稍后查询"
+    case "error":
+        // 评测出错：返回错误信息和错误码
+        response["results"] = []models.TestCaseResult{}
+        response["error_code"] = submission.ErrorCode
+        response["error_message"] = submission.ErrorMsg
+        response["message"] = getErrorMessage(submission.ErrorCode)
+    default:
+        // 等待评测：返回等待状态
+        response["results"] = []models.TestCaseResult{}
+        response["message"] = "代码已提交，等待评测"
+    }
+    
+    c.JSON(http.StatusOK, response)
+}
+
+// getErrorMessage 根据错误码返回用户友好的错误信息
+func getErrorMessage(errorCode string) string {
+    switch errorCode {
+    case "E001":
+        return "题目配置错误：缺少测试用例，请联系管理员"
+    case "E002":
+        return "代码编译失败，请检查语法错误"
+    case "E003":
+        return "代码运行超时，请优化算法效率"
+    case "E004":
+        return "内存使用超限，请优化内存使用"
+    case "E005":
+        return "网络连接错误，请稍后重试"
+    case "E999":
+        return "系统内部错误，请联系管理员"
+    default:
+        return "未知错误，请联系管理员"
+    }
 }

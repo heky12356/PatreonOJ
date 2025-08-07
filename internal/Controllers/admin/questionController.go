@@ -4,7 +4,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"dachuang/internal/models"
 	"net/http"
-
+	"strconv"
 )
 
 type QuestionController struct {
@@ -70,34 +70,41 @@ func (con QuestionController) Store(c *gin.Context) {
 }
 
 func (con QuestionController) Update(c *gin.Context) {
-    // 1. 获取路径参数中的题目ID
-    id := c.Param("id")
-    if id == "" {
-        c.JSON(http.StatusBadRequest, gin.H{"error": "缺少题目ID"})
+    // 1. 获取路径参数中的题目编号
+    numberStr := c.Param("number")
+    if numberStr == "" {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "缺少题目编号"})
         return
     }
 
-    // 2. 绑定请求体到 Question 模型
+    // 2. 将题目编号转换为整数
+    questionNumber, err := strconv.Atoi(numberStr)
+    if err != nil {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "无效的题目编号"})
+        return
+    }
+
+    // 3. 绑定请求体到 Question 模型
     var question models.Question
     if err := c.ShouldBindJSON(&question); err != nil {
         c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
         return
     }
 
-    // 3. 查询题目是否存在
+    // 4. 查询题目是否存在（通过题目编号）
     var existingQuestion models.Question
-    if err := models.DB.First(&existingQuestion, id).Error; err != nil {
+    if err := models.DB.Where("question_number = ?", questionNumber).First(&existingQuestion).Error; err != nil {
         c.JSON(http.StatusNotFound, gin.H{"error": "题目不存在"})
         return
     }
 
-    // 4. 更新题目（只更新请求中提供的字段，零值字段不更新）
+    // 5. 更新题目（只更新请求中提供的字段，零值字段不更新）
     if err := models.DB.Model(&existingQuestion).Updates(question).Error; err != nil {
         c.JSON(http.StatusInternalServerError, gin.H{"error": "更新失败: " + err.Error()})
         return
     }
 
-    // 5. 返回成功响应
+    // 6. 返回成功响应
     c.JSON(http.StatusOK, gin.H{"data": existingQuestion, "msg": "题目更新成功"})
 }
 
