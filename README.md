@@ -88,24 +88,30 @@ go run main.go
 ## API 接口
 
 ### 用户管理
-- `POST /admin/register` - 用户注册
-- `POST /admin/login` - 用户登录
-- `POST /admin/logout` - 用户注销
-- `GET /admin/user` - 获取用户列表
+- `POST /user/register` - 用户注册
+- `POST /user/login` - 用户登录
+- `POST /user/logout` - 用户注销
+- `GET /user/` - 获取用户列表
 
 ### 题目管理
-- `GET /admin/question` - 获取题目列表
-- `POST /admin/question` - 创建题目
-- `POST /admin/question/:id` - 更新题目
+- `GET /question/` - 获取题目列表
+- `POST /question/` - 创建题目
+- `POST /question/:id` - 更新题目
 
 ### 分类管理
-- `GET /admin/category` - 获取分类列表
-- `POST /admin/category` - 创建分类
-- `POST /admin/category/:id` - 更新分类
+- `GET /category/` - 获取分类列表
+- `POST /category/` - 创建分类
+- `POST /category/:id` - 更新分类
+
+### 关系管理
+- `GET /relation/` - 获取关系列表
+
+### 节点管理
+- `GET /node/` - 获取节点列表
 
 ### 代码评测
-- `POST /admin/submit` - 提交代码
-- `GET /admin/submission/:id` - 获取提交结果
+- `POST /submission/` - 提交代码
+- `GET /submission/:id` - 获取提交结果
 
 ## 项目结构
 

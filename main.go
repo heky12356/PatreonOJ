@@ -52,7 +52,7 @@ func main() {
 	})
 
 	// 初始化路由
-	routers.AdminRoutersInit(r)
+	routers.RoutersInit(r)
 
 	// 启动服务器
 	serverAddr := config.GlobalConfig.GetServerAddr()
