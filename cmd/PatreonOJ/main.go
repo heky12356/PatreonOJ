@@ -5,9 +5,9 @@ import (
 	"log"
 	"time"
 
-	"dachuang/config"
-	"dachuang/models"
-	"dachuang/routers"
+	"dachuang/internal/config"
+	"dachuang/internal/models"
+	"dachuang/internal/routers"
 
 	"github.com/gin-gonic/gin"
 )
@@ -25,7 +25,7 @@ func UnixToTime(timestamp int64) string {
 
 func main() {
 	// 初始化配置
-	configPath := "./config.yaml"
+	configPath := "../../config.yaml"
 	if err := config.InitConfig(configPath); err != nil {
 		log.Fatalf("配置初始化失败: %v", err)
 	}

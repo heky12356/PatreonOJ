@@ -2,7 +2,7 @@ package admin
 
 import (
 	"github.com/gin-gonic/gin"
-	"dachuang/models"
+	"dachuang/internal/models"
 	  "net/http"
    
 )

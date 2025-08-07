@@ -1,7 +1,7 @@
 package admin
 
 import (
-    "dachuang/models"
+    "dachuang/internal/models"
     "github.com/gin-gonic/gin"
    
 )

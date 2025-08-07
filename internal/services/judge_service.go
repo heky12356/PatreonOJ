@@ -2,8 +2,8 @@ package services
 
 import (
     "bytes"
-    "dachuang/config"
-    "dachuang/models"
+    "dachuang/internal/config"
+    "dachuang/internal/models"
     "encoding/json"
     "fmt"
     "io/ioutil"

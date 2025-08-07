@@ -158,4 +158,3 @@ PatreonOJ/
 - **数据库**: MySQL / SQLite
 - **配置管理**: Viper
 - **UUID**: Google UUID
-- **模板引擎**: Go HTML Template

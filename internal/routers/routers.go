@@ -1,9 +1,9 @@
 package routers
 
 import (
-	"dachuang/Controllers/admin"
-	"dachuang/config"
-	"dachuang/models"
+	"dachuang/internal/Controllers/admin"
+	"dachuang/internal/config"
+	"dachuang/internal/models"
 
 	"github.com/gin-gonic/gin"
 )
