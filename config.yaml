@@ -20,9 +20,23 @@ server:
 
 # 评测服务配置
 judge:
+  mode: "local"  # local: 本地评测, remote: 远程API评测
   api_url: "http://your-judge-service-api"
   timeout: 15  # 超时时间（秒）
   queue_size: 100  # 队列大小
+  
+  # 本地评测配置
+  local:
+    enabled: true
+    sandbox_dir: "./sandbox"  # 沙箱目录
+    max_memory: 128  # 最大内存限制(MB)
+    max_time: 5  # 最大执行时间(秒)
+    max_output_size: 1024  # 最大输出大小(KB)
+    supported_languages:
+      - "go"
+      - "python"
+      - "cpp"
+      - "java"
 
 # 日志配置
 log:
