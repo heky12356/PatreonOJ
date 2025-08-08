@@ -178,6 +178,7 @@ go build -o PatreonOJ.exe cmd/PatreonOJ/main.go
 
 ### 题目管理
 - `GET /question/` - 获取题目列表（按题目编号排序）
+- `GET /question/:number` - 通过题目编号获取单个题目详情
 - `POST /question/` - 创建题目
 - `POST /question/:number` - 更新题目（使用题目编号）
 

@@ -69,6 +69,32 @@ func (con QuestionController) Store(c *gin.Context) {
     c.JSON(201, gin.H{"data": question, "msg": "题目创建成功"})
 }
 
+func (con QuestionController) Show(c *gin.Context) {
+    // 1. 获取路径参数中的题目编号
+    numberStr := c.Param("number")
+    if numberStr == "" {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "缺少题目编号"})
+        return
+    }
+
+    // 2. 将题目编号转换为整数
+    questionNumber, err := strconv.Atoi(numberStr)
+    if err != nil {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "无效的题目编号"})
+        return
+    }
+
+    // 3. 查询题目（通过题目编号）
+    var question models.Question
+    if err := models.DB.Where("question_number = ?", questionNumber).First(&question).Error; err != nil {
+        c.JSON(http.StatusNotFound, gin.H{"error": "题目不存在"})
+        return
+    }
+
+    // 4. 返回题目详情
+    c.JSON(http.StatusOK, gin.H{"data": question})
+}
+
 func (con QuestionController) Update(c *gin.Context) {
     // 1. 获取路径参数中的题目编号
     numberStr := c.Param("number")

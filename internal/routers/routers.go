@@ -23,8 +23,9 @@ func RoutersInit(r *gin.Engine) {
 	{
 		questionCtrl := &admin.QuestionController{}
 		questionRouter.GET("/", questionCtrl.Index)
+		questionRouter.GET("/:number", questionCtrl.Show)        // 通过题目编号获取单个题目
 		questionRouter.POST("/", questionCtrl.Store)
-		questionRouter.POST("/:number", questionCtrl.Update)  // 改为使用题目编号
+		questionRouter.POST("/:number", questionCtrl.Update)     // 改为使用题目编号
 	}
 
 	// 分类相关路由
