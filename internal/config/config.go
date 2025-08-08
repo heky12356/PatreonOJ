@@ -9,10 +9,11 @@ import (
 
 // Config 全局配置结构体
 type Config struct {
-	Database DatabaseConfig `mapstructure:"database"`
-	Server   ServerConfig   `mapstructure:"server"`
-	Judge    JudgeConfig    `mapstructure:"judge"`
-	Log      LogConfig      `mapstructure:"log"`
+	Database      DatabaseConfig      `mapstructure:"database"`
+	GraphDatabase GraphDatabaseConfig `mapstructure:"graph_database"`
+	Server        ServerConfig        `mapstructure:"server"`
+	Judge         JudgeConfig         `mapstructure:"judge"`
+	Log           LogConfig           `mapstructure:"log"`
 }
 
 // DatabaseConfig 数据库配置
@@ -37,6 +38,19 @@ type MySQLConfig struct {
 // SQLiteConfig SQLite配置
 type SQLiteConfig struct {
 	Path string `mapstructure:"path"`
+}
+
+// GraphDatabaseConfig 图数据库配置
+type GraphDatabaseConfig struct {
+	Neo4j Neo4jConfig `mapstructure:"neo4j"`
+}
+
+// Neo4jConfig Neo4j配置
+type Neo4jConfig struct {
+	URI      string `mapstructure:"uri"`
+	Username string `mapstructure:"username"`
+	Password string `mapstructure:"password"`
+	Database string `mapstructure:"database"`
 }
 
 // ServerConfig 服务器配置
@@ -127,6 +141,12 @@ func setDefaults() {
 	viper.SetDefault("log.level", "info")
 	viper.SetDefault("log.format", "json")
 	viper.SetDefault("log.output", "stdout")
+
+	// 图数据库默认配置
+	viper.SetDefault("graph_database.neo4j.uri", "bolt://localhost:7687")
+	viper.SetDefault("graph_database.neo4j.username", "neo4j")
+	viper.SetDefault("graph_database.neo4j.password", "password")
+	viper.SetDefault("graph_database.neo4j.database", "neo4j")
 }
 
 // GetDatabaseDSN 根据配置类型获取数据库连接字符串

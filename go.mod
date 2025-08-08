@@ -5,6 +5,7 @@ go 1.23.5
 require (
 	github.com/gin-gonic/gin v1.10.1
 	github.com/google/uuid v1.6.0
+	github.com/neo4j/neo4j-go-driver/v5 v5.28.1
 	github.com/spf13/viper v1.18.2
 	gorm.io/driver/mysql v1.6.0
 	gorm.io/driver/sqlite v1.5.4

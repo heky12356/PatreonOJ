@@ -38,6 +38,14 @@ judge:
       - "cpp"
       - "java"
 
+# 图数据库配置
+graph_database:
+  neo4j:
+    uri: "bolt://localhost:7687"
+    username: "neo4j"
+    password: "password"
+    database: "neo4j"  # 使用默认数据库，避免版本兼容问题
+
 # 日志配置
 log:
   level: "info"  # debug, info, warn, error
