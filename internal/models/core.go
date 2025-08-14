@@ -30,7 +30,7 @@ func InitDB() error {
 	case "sqlite":
 		dbPath := config.GlobalConfig.GetDatabaseDSN()
 		// 确保SQLite数据库目录存在
-		if err := ensureDir(filepath.Dir(dbPath)); err != nil {
+		if err = ensureDir(filepath.Dir(dbPath)); err != nil {
 			return fmt.Errorf("创建SQLite数据库目录失败: %w", err)
 		}
 		dialector = sqlite.Open(dbPath)

@@ -40,7 +40,7 @@ func RoutersInit(r *gin.Engine) {
 		userRouter.POST("/register", userCtrl.Register)
 		userRouter.POST("/logout", userCtrl.Logout)
 		userRouter.GET("/solves/:uuid", userSolveCtrl.Index)
-		userRouter.GET("/solve/:id", userSolveCtrl.Show)
+		userRouter.GET("/solve/", userSolveCtrl.Show)
 	}
 
 	// 题目相关路由
