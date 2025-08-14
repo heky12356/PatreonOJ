@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	"dachuang/internal/config"
+
 	"gorm.io/driver/mysql"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -57,9 +58,9 @@ func InitDB() error {
 		}
 
 		// 设置连接池参数
-		sqlDB.SetMaxIdleConns(10)                // 最大空闲连接数
-		sqlDB.SetMaxOpenConns(100)               // 最大打开连接数
-		sqlDB.SetConnMaxLifetime(3600)           // 连接最大生存时间（秒）
+		sqlDB.SetMaxIdleConns(10)      // 最大空闲连接数
+		sqlDB.SetMaxOpenConns(100)     // 最大打开连接数
+		sqlDB.SetConnMaxLifetime(3600) // 连接最大生存时间（秒）
 	}
 
 	log.Println("数据库连接成功")
@@ -71,7 +72,7 @@ func ensureDir(dir string) error {
 	if dir == "" || dir == "." {
 		return nil
 	}
-	return os.MkdirAll(dir, 0755)
+	return os.MkdirAll(dir, 0o755)
 }
 
 // maskPassword 隐藏连接字符串中的密码
@@ -96,9 +97,9 @@ func AutoMigrate() error {
 		&Relation{},
 		&Node{},
 		&QuestionCategory{},
+		&UserSolve{},
 		// 如果有其他模型，在这里添加
 	)
-
 	if err != nil {
 		return fmt.Errorf("数据库表迁移失败: %w", err)
 	}
