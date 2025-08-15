@@ -46,11 +46,13 @@ func RoutersInit(r *gin.Engine) {
 	// 题目相关路由
 	questionRouter := r.Group("/question")
 	{
-		questionCtrl := &admin.QuestionController{}
+		questionCtrl := admin.NewQuestionController(models.DB)
 		questionRouter.GET("/", questionCtrl.Index)
 		questionRouter.GET("/:number", questionCtrl.Show) // 通过题目编号获取单个题目
 		questionRouter.POST("/", questionCtrl.Store)
 		questionRouter.POST("/:number", questionCtrl.Update) // 改为使用题目编号
+		questionRouter.DELETE("/delete", questionCtrl.DeleteProblem)
+
 	}
 
 	// 分类相关路由
