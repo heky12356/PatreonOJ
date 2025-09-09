@@ -319,6 +319,14 @@ go build -o PatreonOJ.exe cmd/PatreonOJ/main.go
 }
 ```
 
+**删除测试用例** `DELETE /testcase/:id`
+```json
+{
+    "id": 1
+}
+```
+
+
 **字段说明：**
 - `question_number`: 题目编号（必填）
 - `input`: 输入数据（必填）

@@ -220,11 +220,14 @@ func (uc *UserController) Login(c *gin.Context) {
 		return
 	}
 
+	permissions := strings.Split(user.Permissions, ",")
+
 	c.JSON(http.StatusOK, gin.H{
-		"message":  "登录成功",
-		"user_id":  user.Id,
-		"uuid":     user.UUID,
-		"username": user.Username,
+		"message":     "登录成功",
+		"user_id":     user.Id,
+		"uuid":        user.UUID,
+		"username":    user.Username,
+		"permissions": permissions,
 	})
 }
 

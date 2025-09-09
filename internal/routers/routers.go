@@ -52,7 +52,6 @@ func RoutersInit(r *gin.Engine) {
 		questionRouter.POST("/", questionCtrl.Store)
 		questionRouter.POST("/:number", questionCtrl.Update) // 改为使用题目编号
 		questionRouter.DELETE("/delete", questionCtrl.DeleteProblem)
-
 	}
 
 	// 分类相关路由

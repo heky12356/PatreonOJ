@@ -1,16 +1,16 @@
 package admin
 
 import (
-	"dachuang/internal/models"
 	"net/http"
 	"strconv"
+
+	"dachuang/internal/models"
 
 	"github.com/gin-gonic/gin"
 )
 
 // TestCaseController 测试用例控制器
-type TestCaseController struct {
-}
+type TestCaseController struct{}
 
 // TestCaseRequest 测试用例请求结构体
 type TestCaseRequest struct {
@@ -44,14 +44,14 @@ func (tc *TestCaseController) Index(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的题目编号"})
 			return
 		}
-		
+
 		// 通过题目编号查找题目ID
 		var question models.Question
 		if err := models.DB.Where("question_number = ?", questionNumber).First(&question).Error; err != nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "题目不存在"})
 			return
 		}
-		
+
 		query = query.Where("question_id = ?", question.Id)
 	}
 
@@ -93,10 +93,10 @@ func (tc *TestCaseController) GetByQuestion(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"result":           testCases,
-		"count":            len(testCases),
-		"question_number":  questionNumber,
-		"question_title":   question.Title,
+		"result":          testCases,
+		"count":           len(testCases),
+		"question_number": questionNumber,
+		"question_title":  question.Title,
 	})
 }
 
@@ -263,16 +263,6 @@ func (tc *TestCaseController) Delete(c *gin.Context) {
 	var testCase models.TestCase
 	if err := models.DB.Where("id = ?", uint(id)).First(&testCase).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "测试用例不存在"})
-		return
-	}
-
-	// 检查是否是该题目的最后一个测试用例
-	var count int64
-	models.DB.Model(&models.TestCase{}).Where("question_id = ?", testCase.QuestionID).Count(&count)
-	if count <= 1 {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "不能删除题目的最后一个测试用例，每个题目至少需要一个测试用例",
-		})
 		return
 	}
 
