@@ -1,12 +1,14 @@
 package main
 
 import (
+	"context"
 	"html/template"
 	"log"
 	"time"
 
 	"dachuang/internal/config"
 	"dachuang/internal/models"
+	"dachuang/internal/oss"
 	"dachuang/internal/routers"
 
 	"github.com/gin-gonic/gin"
@@ -40,6 +42,30 @@ func main() {
 		log.Fatalf("数据库表迁移失败: %v", err)
 	}
 
+	// 初始化OJ首页数据
+	if err := models.InitOjOverView(); err != nil {
+		log.Fatalf("OJ首页数据初始化失败: %v", err)
+	}
+
+	// 初始化OSS客户端
+	ossClient, err := oss.NewOSSClient(config.GlobalConfig.OSS.Address, config.GlobalConfig.OSS.AccessKey, config.GlobalConfig.OSS.SecretKey)
+	if err != nil {
+		log.Fatalf("OSS初始化失败: %v", err)
+	} else {
+		log.Printf("OSS初始化成功: %s", config.GlobalConfig.OSS.Address)
+		// 自动创建存储桶
+		ctx := context.Background()
+		bucketName := config.GlobalConfig.OSS.BucketName
+		if bucketName == "" {
+			bucketName = "patreon-oj-cases" // 默认值
+		}
+		if err := ossClient.CreateBucket(ctx, bucketName); err != nil {
+			log.Printf("Warning: 创建OSS存储桶失败: %v", err)
+		} else {
+			log.Printf("OSS存储桶检查/创建成功: %s", bucketName)
+		}
+	}
+
 	// 设置Gin运行模式
 	gin.SetMode(config.GlobalConfig.Server.Mode)
 
@@ -52,7 +78,7 @@ func main() {
 	})
 
 	// 初始化路由
-	routers.RoutersInit(r)
+	routers.RoutersInit(r, ossClient)
 
 	// 启动服务器
 	serverAddr := config.GlobalConfig.GetServerAddr()

@@ -8,11 +8,12 @@ import (
 	"dachuang/internal/config"
 	"dachuang/internal/graph"
 	"dachuang/internal/models"
+	"dachuang/internal/oss"
 
 	"github.com/gin-gonic/gin"
 )
 
-func RoutersInit(r *gin.Engine) {
+func RoutersInit(r *gin.Engine, ossClient *oss.OSS) {
 	// 初始化图数据库服务
 	var graphService *graph.QuestionGraphService
 	if config.GlobalConfig != nil {
@@ -32,9 +33,8 @@ func RoutersInit(r *gin.Engine) {
 	// 用户相关路由
 	userRouter := r.Group("/user")
 	{
-		userCtrl := admin.NewUserController(models.DB)
+		userCtrl := admin.NewUserController(models.DB, ossClient)
 		userSolveCtrl := admin.NewUserSolveController(models.DB)
-
 		userRouter.GET("/", userCtrl.Index)
 		userRouter.POST("/login", userCtrl.Login)
 		userRouter.POST("/register", userCtrl.Register)
@@ -48,6 +48,7 @@ func RoutersInit(r *gin.Engine) {
 	{
 		questionCtrl := admin.NewQuestionController(models.DB)
 		questionRouter.GET("/", questionCtrl.Index)
+		questionRouter.GET("/new", questionCtrl.GetNewProblems)
 		questionRouter.GET("/:number", questionCtrl.Show) // 通过题目编号获取单个题目
 		questionRouter.POST("/", questionCtrl.Store)
 		questionRouter.POST("/:number", questionCtrl.Update) // 改为使用题目编号
@@ -61,6 +62,7 @@ func RoutersInit(r *gin.Engine) {
 		categoryRouter.GET("/", categoryCtrl.Index)
 		categoryRouter.POST("/", categoryCtrl.Store)
 		categoryRouter.POST("/:id", categoryCtrl.Update)
+		categoryRouter.DELETE("/delete/:id", categoryCtrl.Delete)
 	}
 
 	// 关系相关路由
@@ -80,7 +82,7 @@ func RoutersInit(r *gin.Engine) {
 	// 提交相关路由
 	submissionRouter := r.Group("/submission")
 	{
-		userCtrl := admin.NewUserController(models.DB)
+		userCtrl := admin.NewUserController(models.DB, ossClient)
 		submissionRouter.POST("/", userCtrl.SubmitCode)
 		submissionRouter.GET("/:id", userCtrl.GetSubmissionResult)
 	}
@@ -88,12 +90,13 @@ func RoutersInit(r *gin.Engine) {
 	// 测试用例相关路由
 	testCaseRouter := r.Group("/testcase")
 	{
-		testCaseCtrl := &admin.TestCaseController{}
+		testCaseCtrl := admin.NewTestCaseController(ossClient)
 		testCaseRouter.GET("/", testCaseCtrl.Index)                         // 获取测试用例列表
 		testCaseRouter.GET("/question/:number", testCaseCtrl.GetByQuestion) // 根据题目编号获取测试用例
 		testCaseRouter.GET("/:id", testCaseCtrl.Show)                       // 获取单个测试用例详情
 		testCaseRouter.POST("/", testCaseCtrl.Store)                        // 添加单个测试用例
 		testCaseRouter.POST("/batch", testCaseCtrl.BatchStore)              // 批量添加测试用例
+		testCaseRouter.POST("/oss/commit", testCaseCtrl.OSSCommit)
 		testCaseRouter.PUT("/:id", testCaseCtrl.Update)                     // 更新测试用例
 		testCaseRouter.DELETE("/:id", testCaseCtrl.Delete)                  // 删除测试用例
 	}
@@ -117,6 +120,25 @@ func RoutersInit(r *gin.Engine) {
 
 			// 学习路径
 			graphRouter.GET("/path", graphCtrl.FindLearningPath) // ?start=1001&end=1005
+		}
+	}
+
+	// OJ首页相关路由
+	ojOverViewRouter := r.Group("/overview")
+	{
+		ojOverViewCtrl := Controllers.NewOjOverViewController(models.DB)
+		ojOverViewRouter.GET("/getHomeText", ojOverViewCtrl.GetHomeText)
+		ojOverViewRouter.POST("/updateHomeText", ojOverViewCtrl.UpdateHomeText)
+	}
+
+	// OSS 相关路由
+	if ossClient != nil {
+		ossRouter := r.Group("/oss")
+		{
+			ossCtrl := admin.NewOSSController(ossClient)
+			ossRouter.POST("/upload", ossCtrl.UploadFile)
+			ossRouter.GET("/upload-url", ossCtrl.GetUploadURL)
+			ossRouter.GET("/files", ossCtrl.ListFiles)
 		}
 	}
 }

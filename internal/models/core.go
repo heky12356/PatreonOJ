@@ -98,6 +98,7 @@ func AutoMigrate() error {
 		&Node{},
 		&QuestionCategory{},
 		&UserSolve{},
+		&OjOverView{},
 		// 如果有其他模型，在这里添加
 	)
 	if err != nil {

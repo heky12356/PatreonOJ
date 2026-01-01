@@ -1,10 +1,12 @@
 package admin
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 
 	"dachuang/internal/models"
+	"dachuang/internal/util"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -21,10 +23,58 @@ func NewQuestionController(db *gorm.DB) *QuestionController {
 func (con QuestionController) Index(c *gin.Context) {
 	questionList := []models.Question{}
 
+	// 获取搜索内容
+	q := c.DefaultQuery("q", "%")
+
+	// 获取分页和每页大小
+	pageIdx, _ := strconv.Atoi(c.DefaultQuery("pageIdx", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("pageSize", "3"))
+	difficult := c.DefaultQuery("difficult", "")
+
+	// 获取前端传过来的uuid
+	uuid := c.DefaultQuery("uuid", "")
+
+	if q != "%" {
+		q = "%" + q + "%"
+	}
+
+	if difficult == "" {
+		difficult = "%"
+	}
+
+	// 分用户组筛选
+	status := "%"
+	if !util.UserInstance.HasPermission(uuid, "admin") {
+		status = "published"
+	}
+
+	// 先不按照分页，查找一下全部的内容，为了确定在搜索的情况下有多少个元素
+	models.DB.Where("difficulty Like ? and (title Like ? or question_number Like ?) and status Like ?", difficult, q, q, status).Order("question_number ASC").Find(&questionList)
+	totalCnt := len(questionList)
+
 	// 按题目编号排序查询所有题目
-	models.DB.Order("question_number ASC").Find(&questionList)
+	models.DB.Where("difficulty Like ? and (title Like ? or question_number Like ?) and status Like ?", difficult, q, q, status).Order("question_number ASC").Find(&questionList).Limit(pageSize).Offset(pageSize * (pageIdx - 1)).Find(&questionList)
 	c.JSON(200, gin.H{
-		"result": questionList,
+		"result":   questionList,
+		"pageIdx":  pageIdx,
+		"pageSize": pageSize,
+		"totalCnt": totalCnt,
+	})
+}
+
+func (con QuestionController) GetNewProblems(c *gin.Context) {
+	questionList := []models.Question{}
+
+	// 获取分页和每页大小
+	pageIdx, _ := strconv.Atoi(c.DefaultQuery("pageIdx", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("pageSize", "3"))
+
+	// 按题目编号排序查询所有题目
+	models.DB.Where("status = ?", "published").Order("id DESC").Find(&questionList).Limit(pageSize).Offset(pageSize * (pageIdx - 1)).Find(&questionList)
+	c.JSON(200, gin.H{
+		"result":   questionList,
+		"pageIdx":  pageIdx,
+		"pageSize": pageSize,
 	})
 }
 
@@ -36,6 +86,7 @@ func (con QuestionController) Store(c *gin.Context) {
 		c.JSON(400, gin.H{"error": err.Error()})
 		return
 	}
+	fmt.Println(question)
 
 	// 处理题目编号逻辑
 	if question.QuestionNumber == 0 {
@@ -193,5 +244,5 @@ func (con QuestionController) DeleteProblem(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"msg": "题目删除成功"})
+	c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "题目删除成功"})
 }

@@ -2,6 +2,7 @@ package services
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
@@ -12,6 +13,7 @@ import (
 
 	"dachuang/internal/config"
 	"dachuang/internal/models"
+	"dachuang/internal/oss"
 
 	"gorm.io/gorm"
 )
@@ -22,10 +24,12 @@ type JudgeService struct {
 	HTTPClient        *http.Client        // HTTP客户端
 	LocalJudgeService *LocalJudgeService  // 本地评测服务
 	Config            *config.JudgeConfig // 评测配置
+	OSSClient         *oss.OSS
+	OSSBucket         string
 }
 
 // NewJudgeService 创建评测服务实例
-func NewJudgeService(cfg *config.JudgeConfig, db *gorm.DB) *JudgeService {
+func NewJudgeService(cfg *config.JudgeConfig, db *gorm.DB, ossClient *oss.OSS, ossBucket string) *JudgeService {
 	timeout := time.Duration(cfg.Timeout) * time.Second
 
 	var localJudge *LocalJudgeService
@@ -38,6 +42,8 @@ func NewJudgeService(cfg *config.JudgeConfig, db *gorm.DB) *JudgeService {
 		DB:                db,
 		Config:            cfg,
 		LocalJudgeService: localJudge,
+		OSSClient:         ossClient,
+		OSSBucket:         ossBucket,
 		HTTPClient: &http.Client{
 			Timeout: timeout,
 		},
@@ -100,6 +106,31 @@ func (js *JudgeService) executeJudgement(code string, testCases []models.TestCas
 	}
 }
 
+// loadTestCaseIO 加载测试用例的输入和输出
+func (js *JudgeService) loadTestCaseIO(ctx context.Context, tc models.TestCase) (string, string, error) {
+	input := tc.Input
+	expected := tc.ExpectedOutput
+
+	if js.OSSClient != nil && js.OSSBucket != "" {
+		if tc.InputKey != "" {
+			b, err := js.OSSClient.GetObjectBytes(ctx, js.OSSBucket, tc.InputKey)
+			if err != nil {
+				return "", "", fmt.Errorf("读取测试用例输入失败(key=%s): %w", tc.InputKey, err)
+			}
+			input = string(b)
+		}
+		if tc.OutputKey != "" {
+			b, err := js.OSSClient.GetObjectBytes(ctx, js.OSSBucket, tc.OutputKey)
+			if err != nil {
+				return "", "", fmt.Errorf("读取测试用例输出失败(key=%s): %w", tc.OutputKey, err)
+			}
+			expected = string(b)
+		}
+	}
+
+	return input, strings.TrimSpace(expected), nil
+}
+
 // executeLocalJudgement 执行本地评测
 func (js *JudgeService) executeLocalJudgement(code string, testCases []models.TestCase) ([]models.TestCaseResult, error) {
 	var results []models.TestCaseResult
@@ -114,20 +145,27 @@ func (js *JudgeService) executeLocalJudgement(code string, testCases []models.Te
 		return nil, fmt.Errorf("不支持的编程语言: %s", language)
 	}
 
+	ctx := context.Background()
 	for _, tc := range testCases {
-		result, err := js.LocalJudgeService.JudgeCode(code, tc.Input, language)
+		input, expected, err := js.loadTestCaseIO(ctx, tc)
+		if err != nil {
+			return nil, err
+		}
+
+		result, err := js.LocalJudgeService.JudgeCode(code, input, language)
 		if err != nil {
 			result = &models.TestCaseResult{
-				Input:          tc.Input,
-				ExpectedOutput: tc.ExpectedOutput,
+				Input:          input,
+				ExpectedOutput: expected,
 				ActualOutput:   fmt.Sprintf("Error: %v", err),
 				IsCorrect:      false,
 				Runtime:        0,
 				MemoryUsage:    0,
 			}
 		} else {
-			result.ExpectedOutput = tc.ExpectedOutput
-			result.IsCorrect = result.ActualOutput == tc.ExpectedOutput
+			result.Input = input
+			result.ExpectedOutput = expected
+			result.IsCorrect = strings.TrimSpace(result.ActualOutput) == expected
 		}
 
 		results = append(results, *result)
@@ -140,15 +178,20 @@ func (js *JudgeService) executeLocalJudgement(code string, testCases []models.Te
 func (js *JudgeService) executeRemoteJudgement(code string, testCases []models.TestCase) ([]models.TestCaseResult, error) {
 	var results []models.TestCaseResult
 
+	ctx := context.Background()
 	for _, tc := range testCases {
-		result := models.TestCaseResult{
-			Input:          tc.Input,
-			ExpectedOutput: tc.ExpectedOutput,
+		input, expected, err := js.loadTestCaseIO(ctx, tc)
+		if err != nil {
+			return nil, err
 		}
 
-		// 调用评测系统
+		result := models.TestCaseResult{
+			Input:          input,
+			ExpectedOutput: expected,
+		}
+
 		startTime := time.Now()
-		actualOutput, err := js.callJudge(code, tc.Input)
+		actualOutput, err := js.callJudge(code, input)
 		runtime := time.Since(startTime).Milliseconds()
 
 		if err != nil {
@@ -156,7 +199,7 @@ func (js *JudgeService) executeRemoteJudgement(code string, testCases []models.T
 			result.IsCorrect = false
 		} else {
 			result.ActualOutput = actualOutput
-			result.IsCorrect = actualOutput == tc.ExpectedOutput
+			result.IsCorrect = strings.TrimSpace(actualOutput) == expected
 		}
 		result.Runtime = runtime
 

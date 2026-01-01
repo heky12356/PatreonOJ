@@ -14,12 +14,21 @@ type Config struct {
 	Server        ServerConfig        `mapstructure:"server"`
 	Judge         JudgeConfig         `mapstructure:"judge"`
 	Log           LogConfig           `mapstructure:"log"`
+	OSS           OSSConfig           `mapstructure:"oss"`
+}
+
+// OSSConfig OSS配置
+type OSSConfig struct {
+	Address    string `mapstructure:"address"`
+	AccessKey  string `mapstructure:"access_key"`
+	SecretKey  string `mapstructure:"secret_key"`
+	BucketName string `mapstructure:"bucket_name"`
 }
 
 // DatabaseConfig 数据库配置
 type DatabaseConfig struct {
-	Type   string      `mapstructure:"type"`
-	MySQL  MySQLConfig `mapstructure:"mysql"`
+	Type   string       `mapstructure:"type"`
+	MySQL  MySQLConfig  `mapstructure:"mysql"`
 	SQLite SQLiteConfig `mapstructure:"sqlite"`
 }
 

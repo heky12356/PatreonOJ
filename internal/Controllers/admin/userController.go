@@ -11,6 +11,7 @@ import (
 
 	"dachuang/internal/config"
 	"dachuang/internal/models"
+	"dachuang/internal/oss"
 	"dachuang/internal/services"
 
 	"github.com/gin-gonic/gin"
@@ -101,11 +102,15 @@ type UserController struct {
 }
 
 // 初始化控制器
-func NewUserController(db *gorm.DB) *UserController {
+func NewUserController(db *gorm.DB, ossClient *oss.OSS) *UserController {
 	queueSize := config.GlobalConfig.Judge.QueueSize
+	bucket := config.GlobalConfig.OSS.BucketName
+	if bucket == "" {
+		bucket = "patreon-oj-cases"
+	}
 	controller := &UserController{
 		db:              db,
-		judgeService:    services.NewJudgeService(&config.GlobalConfig.Judge, db),
+		judgeService:    services.NewJudgeService(&config.GlobalConfig.Judge, db, ossClient, bucket),
 		submissionQueue: make(chan *models.Submission, queueSize),
 	}
 

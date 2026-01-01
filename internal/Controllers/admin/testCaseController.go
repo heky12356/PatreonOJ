@@ -1,16 +1,25 @@
 package admin
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 
+	"dachuang/internal/config"
 	"dachuang/internal/models"
+	"dachuang/internal/oss"
 
 	"github.com/gin-gonic/gin"
 )
 
 // TestCaseController 测试用例控制器
-type TestCaseController struct{}
+type TestCaseController struct {
+	ossClient *oss.OSS
+}
+
+func NewTestCaseController(ossClient *oss.OSS) *TestCaseController {
+	return &TestCaseController{ossClient: ossClient}
+}
 
 // TestCaseRequest 测试用例请求结构体
 type TestCaseRequest struct {
@@ -28,6 +37,13 @@ type BatchTestCaseRequest struct {
 		ExpectedOutput string `json:"expected_output" binding:"required"` // 期望输出
 		IsHidden       bool   `json:"is_hidden"`                          // 是否隐藏测试用例
 	} `json:"test_cases" binding:"required,min=1"` // 测试用例列表，至少包含一个
+}
+
+type OSSTestCaseCommitRequest struct {
+	QuestionNumber int    `json:"question_number" binding:"required"`
+	InputKey       string `json:"input_key" binding:"required"`
+	OutputKey      string `json:"output_key" binding:"required"`
+	IsHidden       bool   `json:"is_hidden"`
 }
 
 // Index 获取测试用例列表
@@ -174,6 +190,63 @@ func (tc *TestCaseController) BatchStore(c *gin.Context) {
 		"message": "批量创建测试用例成功",
 		"count":   len(testCases),
 		"result":  testCases,
+	})
+}
+
+func (tc *TestCaseController) OSSCommit(c *gin.Context) {
+	if tc.ossClient == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "OSS 未初始化"})
+		return
+	}
+
+	var request OSSTestCaseCommitRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	var question models.Question
+	if err := models.DB.Where("question_number = ?", request.QuestionNumber).First(&question).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "题目不存在"})
+		return
+	}
+
+	bucket := config.GlobalConfig.OSS.BucketName
+	if bucket == "" {
+		bucket = "patreon-oj-cases"
+	}
+
+	ctx := context.Background()
+	inInfo, err := tc.ossClient.StatObject(ctx, bucket, request.InputKey)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "input_key 不存在或不可访问: " + err.Error()})
+		return
+	}
+	outInfo, err := tc.ossClient.StatObject(ctx, bucket, request.OutputKey)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "output_key 不存在或不可访问: " + err.Error()})
+		return
+	}
+
+	testCase := models.TestCase{
+		QuestionID:  question.Id,
+		InputKey:    request.InputKey,
+		OutputKey:   request.OutputKey,
+		InputSize:   inInfo.Size,
+		OutputSize:  outInfo.Size,
+		IsHidden:    request.IsHidden,
+		Input:       "",
+		ExpectedOutput: "",
+	}
+
+	if err := models.DB.Create(&testCase).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "创建测试用例失败"})
+		return
+	}
+
+	c.JSON(http.StatusCreated, gin.H{
+		"message": "测试用例创建成功",
+		"result":  testCase,
 	})
 }
 
