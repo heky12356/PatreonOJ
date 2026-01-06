@@ -90,6 +90,10 @@ func AutoMigrate() error {
 	// 自动迁移所有模型
 	err := DB.AutoMigrate(
 		&User{},
+		&Role{},
+		&Permission{},
+		&UserQuestionMastery{},
+		&UserTagMastery{},
 		&Question{},
 		&Category{},
 		&Submission{},

@@ -8,6 +8,9 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"path"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -233,6 +236,86 @@ func (js *JudgeService) getTestCases(questionID int) ([]models.TestCase, error) 
 	if err := js.DB.Where("question_id = ? AND is_hidden = ?", questionID, false).
 		Find(&testCases).Error; err != nil {
 		return nil, fmt.Errorf("数据库查询失败: %w", err)
+	}
+
+	if len(testCases) != 0 {
+		return testCases, nil
+	}
+
+	if js.OSSClient == nil || js.OSSBucket == "" {
+		return nil, fmt.Errorf("题目没有可用的测试用例")
+	}
+
+	var question models.Question
+	if err := js.DB.Where("id = ?", questionID).First(&question).Error; err != nil {
+		return nil, fmt.Errorf("题目没有可用的测试用例")
+	}
+
+	prefix := fmt.Sprintf("problems/%d/", question.QuestionNumber)
+
+	ctx := context.Background()
+	objects, err := js.OSSClient.ListObjects(ctx, js.OSSBucket, prefix, true)
+	if err != nil {
+		return nil, fmt.Errorf("获取测试用例失败: %w", err)
+	}
+
+	type pair struct{
+		inKey  string
+		outKey string
+	}
+	pairs := make(map[int]*pair)
+
+	for _, key := range objects {
+		if strings.HasSuffix(key, "/") {
+			continue
+		}
+
+		name := path.Base(key)
+		if strings.HasSuffix(name, ".in") {
+			n, err := strconv.Atoi(strings.TrimSuffix(name, ".in"))
+			if err != nil {
+				continue
+			}
+			p := pairs[n]
+			if p == nil {
+				p = &pair{}
+				pairs[n] = p
+			}
+			p.inKey = key
+			continue
+		}
+		if strings.HasSuffix(name, ".out") {
+			n, err := strconv.Atoi(strings.TrimSuffix(name, ".out"))
+			if err != nil {
+				continue
+			}
+			p := pairs[n]
+			if p == nil {
+				p = &pair{}
+				pairs[n] = p
+			}
+			p.outKey = key
+			continue
+		}
+	}
+
+	nums := make([]int, 0, len(pairs))
+	for n := range pairs {
+		nums = append(nums, n)
+	}
+	sort.Ints(nums)
+
+	for _, n := range nums {
+		p := pairs[n]
+		if p == nil || p.inKey == "" || p.outKey == "" {
+			continue
+		}
+		testCases = append(testCases, models.TestCase{
+			QuestionID: questionID,
+			InputKey:   p.inKey,
+			OutputKey:  p.outKey,
+			IsHidden:   false,
+		})
 	}
 
 	if len(testCases) == 0 {

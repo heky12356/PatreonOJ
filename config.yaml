@@ -13,6 +13,13 @@ database:
   sqlite:
     path: "./data/patreon.db"
 
+# OSS 配置
+oss:
+  address: "localhost:9090"
+  access_key: "heky"
+  secret_key: "heky00172"
+  bucket_name: "patreon-oj-cases"
+
 # 服务器配置
 server:
   port: 8080

@@ -1,11 +1,11 @@
 package routers
 
 import (
+	"context"
 	"log"
 
 	"dachuang/internal/Controllers"
 	"dachuang/internal/Controllers/admin"
-	"dachuang/internal/config"
 	"dachuang/internal/graph"
 	"dachuang/internal/models"
 	"dachuang/internal/oss"
@@ -13,27 +13,12 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func RoutersInit(r *gin.Engine, ossClient *oss.OSS) {
-	// 初始化图数据库服务
-	var graphService *graph.QuestionGraphService
-	if config.GlobalConfig != nil {
-		neo4jClient, err := graph.NewNeo4jClient(graph.Neo4jConfig{
-			URI:      config.GlobalConfig.GraphDatabase.Neo4j.URI,
-			Username: config.GlobalConfig.GraphDatabase.Neo4j.Username,
-			Password: config.GlobalConfig.GraphDatabase.Neo4j.Password,
-			Database: config.GlobalConfig.GraphDatabase.Neo4j.Database,
-		})
-		if err != nil {
-			log.Printf("Warning: Failed to initialize Neo4j client: %v", err)
-		} else {
-			graphService = graph.NewQuestionGraphService(neo4jClient)
-		}
-	}
+func RoutersInit(r *gin.Engine, ossClient *oss.OSS, graphService *graph.QuestionGraphService) {
+	userCtrl := admin.NewUserController(models.DB, ossClient, graphService)
 
 	// 用户相关路由
 	userRouter := r.Group("/user")
 	{
-		userCtrl := admin.NewUserController(models.DB, ossClient)
 		userSolveCtrl := admin.NewUserSolveController(models.DB)
 		userRouter.GET("/", userCtrl.Index)
 		userRouter.POST("/login", userCtrl.Login)
@@ -41,6 +26,19 @@ func RoutersInit(r *gin.Engine, ossClient *oss.OSS) {
 		userRouter.POST("/logout", userCtrl.Logout)
 		userRouter.GET("/solves/:uuid", userSolveCtrl.Index)
 		userRouter.GET("/solve/", userSolveCtrl.Show)
+
+		userRouter.GET("/:uuid", userCtrl.Show)
+		userRouter.PUT("/:uuid", userCtrl.Update)
+		userRouter.GET("/:uuid/mastery/questions", userCtrl.ListQuestionMastery)
+		userRouter.GET("/:uuid/mastery/tags", userCtrl.ListTagMastery)
+		userRouter.POST("/:uuid/mastery/events", userCtrl.SubmitMasteryEvent)
+		userRouter.DELETE("/:uuid/mastery/questions/:number", userCtrl.DeleteQuestionMastery)
+		userRouter.DELETE("/:uuid/mastery/tags", userCtrl.DeleteTagMastery)
+	}
+
+	apiV1Router := r.Group("/api/v1")
+	{
+		apiV1Router.POST("/recommendations", userCtrl.GetRecommendationsV1)
 	}
 
 	// 题目相关路由
@@ -82,7 +80,6 @@ func RoutersInit(r *gin.Engine, ossClient *oss.OSS) {
 	// 提交相关路由
 	submissionRouter := r.Group("/submission")
 	{
-		userCtrl := admin.NewUserController(models.DB, ossClient)
 		submissionRouter.POST("/", userCtrl.SubmitCode)
 		submissionRouter.GET("/:id", userCtrl.GetSubmissionResult)
 	}
@@ -97,16 +94,20 @@ func RoutersInit(r *gin.Engine, ossClient *oss.OSS) {
 		testCaseRouter.POST("/", testCaseCtrl.Store)                        // 添加单个测试用例
 		testCaseRouter.POST("/batch", testCaseCtrl.BatchStore)              // 批量添加测试用例
 		testCaseRouter.POST("/oss/commit", testCaseCtrl.OSSCommit)
-		testCaseRouter.PUT("/:id", testCaseCtrl.Update)                     // 更新测试用例
-		testCaseRouter.DELETE("/:id", testCaseCtrl.Delete)                  // 删除测试用例
+		testCaseRouter.PUT("/:id", testCaseCtrl.Update)    // 更新测试用例
+		testCaseRouter.DELETE("/:id", testCaseCtrl.Delete) // 删除测试用例
 	}
 
 	// 图数据库相关路由
 	if graphService != nil {
 		graphRouter := r.Group("/graph")
 		{
+			if err := graphService.InitGraph(context.Background(), models.DB); err != nil {
+				log.Printf("Warning: Failed to init graph: %v", err)
+			}
 			graphCtrl := Controllers.NewGraphController(models.DB, graphService)
-			// 题目同步
+			// 获取所有题目节点
+			graphRouter.GET("/node", graphCtrl.ListQuestions)
 			graphRouter.POST("/questions/:number/sync", graphCtrl.SyncQuestion)
 
 			// 关系管理

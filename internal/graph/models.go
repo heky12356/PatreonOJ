@@ -25,6 +25,13 @@ const (
 	SIMILAR RelationshipType = "SIMILAR"
 	// CATEGORY 分类关系：A和B属于同一类别
 	CATEGORY RelationshipType = "CATEGORY"
+
+	TAG_SIMILAR RelationshipType = "TAG_SIMILAR"
+
+	// TAG 同标签推荐：基于 (Question)-[:HAS_SKILL]->(Skill)<-[:HAS_SKILL]-(Question)
+	TAG RelationshipType = "TAG"
+	// TAG_CO_OCCUR 共现标签推荐：基于 Skill 间的 :SKILL_CO_OCCUR，再回到题目
+	TAG_CO_OCCUR RelationshipType = "TAG_CO_OCCUR"
 )
 
 // QuestionRelation 题目关系结构

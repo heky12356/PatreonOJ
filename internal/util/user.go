@@ -1,7 +1,6 @@
 package util
 
 import (
-	"fmt"
 	"strings"
 
 	"dachuang/internal/models"
@@ -25,15 +24,37 @@ func (p *permissionCheckImpl) hasPermission(uuid string, perm string) bool {
 	if uuid == "" {
 		return false
 	}
+
 	var user models.User
-	models.DB.Where("uuid = ?", uuid).First(&user)
-	fmt.Println("uuid = " + uuid + "permission : " + user.Permissions)
-	if strings.Contains(user.Permissions, perm) {
-		return true
-	} else {
-		fmt.Println("没有权限")
+	if err := models.DB.Preload("Roles.Permissions").Where("uuid = ?", uuid).First(&user).Error; err != nil {
 		return false
 	}
+
+	if user.Status != "" && user.Status != "active" {
+		return false
+	}
+
+	if perm == "" {
+		return true // 空权限默认允许
+	}
+
+	if user.Permissions != "" {
+		for _, token := range strings.Split(user.Permissions, ",") {
+			if strings.TrimSpace(token) == perm {
+				return true
+			}
+		}
+	}
+
+	for _, role := range user.Roles {
+		for _, p := range role.Permissions {
+			if p.Code == perm {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 var UserInstance = &User{

@@ -37,10 +37,8 @@ func (gc *GraphController) SyncQuestion(c *gin.Context) {
 		return
 	}
 
-	// 从关系型数据库获取题目信息
 	var question models.Question
 	if err := gc.db.Where("question_number = ?", questionNumber).First(&question).Error; err != nil {
-		// log.Printf("查询题目失败: %v", err)
 		if err == gorm.ErrRecordNotFound {
 			c.JSON(http.StatusNotFound, gin.H{"error": "题目不存在"})
 			return
@@ -49,8 +47,7 @@ func (gc *GraphController) SyncQuestion(c *gin.Context) {
 		return
 	}
 
-	// 转换为图节点
-	now := time.Now().UTC() // 使用UTC时间避免时区问题
+	now := time.Now().UTC()
 	questionNode := graph.QuestionNode{
 		QuestionNumber: question.QuestionNumber,
 		Title:          question.Title,
@@ -61,7 +58,6 @@ func (gc *GraphController) SyncQuestion(c *gin.Context) {
 		UpdatedAt:      now,
 	}
 
-	// 同步到图数据库
 	ctx := context.Background()
 	if err := gc.graphService.CreateOrUpdateQuestion(ctx, questionNode); err != nil {
 		log.Printf("同步题目到图数据库失败: %v", err)
@@ -69,7 +65,19 @@ func (gc *GraphController) SyncQuestion(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "题目同步成功"})
+	if err := gc.graphService.SyncQuestionSkills(ctx, question.QuestionNumber, question.Tags, now); err != nil {
+		log.Printf("同步题目标签到图数据库失败: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "同步题目标签失败"})
+		return
+	}
+
+	if err := gc.graphService.BuildTagSimilarEdgesForQuestion(ctx, question.QuestionNumber, now); err != nil {
+		log.Printf("构建同标签题目关系失败: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "构建同标签题目关系失败"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "题目、标签及同标签关系同步成功"})
 }
 
 // CreateRelation 创建题目关系
@@ -248,4 +256,86 @@ func (gc *GraphController) GetRecommendations(c *gin.Context) {
 		"question_number": questionNumber,
 		"recommendations": recommendations,
 	})
+}
+
+// ListQuestions 获取图节点（题目 + 技能）及边（用于前端可视化）
+func (gc *GraphController) ListQuestions(c *gin.Context) {
+	ctx := context.Background()
+
+	questions, err := gc.graphService.ListQuestions(ctx)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "获取题目节点失败"})
+		return
+	}
+	skills, err := gc.graphService.ListSkills(ctx)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "获取技能节点失败"})
+		return
+	}
+
+	questionRelations, err := gc.graphService.ListRelations(ctx)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "获取题目关系失败"})
+		return
+	}
+	questionSkillRelations, err := gc.graphService.ListQuestionSkillRelations(ctx)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "获取题目-技能关系失败"})
+		return
+	}
+	skillRelations, err := gc.graphService.ListSkillRelations(ctx)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "获取技能关系失败"})
+		return
+	}
+
+	type Edge struct {
+		From   string  `json:"from"`
+		To     string  `json:"to"`
+		Type   string  `json:"type"`
+		Weight float64 `json:"weight"`
+	}
+
+	edges := make([]Edge, 0, len(questionRelations)+len(questionSkillRelations)+len(skillRelations))
+	for _, r := range questionRelations {
+		edges = append(edges, Edge{
+			From:   "Q:" + strconv.Itoa(r.FromQuestionNumber),
+			To:     "Q:" + strconv.Itoa(r.ToQuestionNumber),
+			Type:   string(r.RelationType),
+			Weight: r.Weight,
+		})
+	}
+	for _, r := range questionSkillRelations {
+		edges = append(edges, Edge{
+			From:   "Q:" + strconv.Itoa(r.QuestionNumber),
+			To:     "S:" + r.SkillKey,
+			Type:   "HAS_SKILL",
+			Weight: r.Weight,
+		})
+	}
+	for _, r := range skillRelations {
+		edges = append(edges, Edge{
+			From:   "S:" + r.FromKey,
+			To:     "S:" + r.ToKey,
+			Type:   string(r.RelationType),
+			Weight: r.Weight,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"questions":                questions,
+		"skills":                   skills,
+		"question_relations":       questionRelations,
+		"question_skill_relations": questionSkillRelations,
+		"skill_relations":          skillRelations,
+		"edges":                    edges,
+		"count":                    len(questions),
+		"skill_count":              len(skills),
+		"edge_count":               len(edges),
+	})
+}
+
+// InitGraph 初始化图数据库，同步题目节点和关系
+func (gc *GraphController) InitGraph(ctx context.Context) error {
+	return gc.graphService.InitGraph(ctx, gc.db)
 }

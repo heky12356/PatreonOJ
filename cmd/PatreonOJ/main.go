@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"dachuang/internal/config"
+	"dachuang/internal/graph"
 	"dachuang/internal/models"
 	"dachuang/internal/oss"
 	"dachuang/internal/routers"
@@ -66,6 +67,22 @@ func main() {
 		}
 	}
 
+	var graphService *graph.QuestionGraphService
+	if config.GlobalConfig != nil {
+		neo4jClient, err := graph.NewNeo4jClient(graph.Neo4jConfig{
+			URI:      config.GlobalConfig.GraphDatabase.Neo4j.URI,
+			Username: config.GlobalConfig.GraphDatabase.Neo4j.Username,
+			Password: config.GlobalConfig.GraphDatabase.Neo4j.Password,
+			Database: config.GlobalConfig.GraphDatabase.Neo4j.Database,
+		})
+		if err != nil {
+			log.Printf("Warning: Failed to initialize Neo4j client: %v", err)
+		} else {
+			graphService = graph.NewQuestionGraphService(neo4jClient)
+			log.Printf("图数据库服务初始化成功: %s", config.GlobalConfig.GraphDatabase.Neo4j.URI)
+		}
+	}
+
 	// 设置Gin运行模式
 	gin.SetMode(config.GlobalConfig.Server.Mode)
 
@@ -78,7 +95,7 @@ func main() {
 	})
 
 	// 初始化路由
-	routers.RoutersInit(r, ossClient)
+	routers.RoutersInit(r, ossClient, graphService)
 
 	// 启动服务器
 	serverAddr := config.GlobalConfig.GetServerAddr()

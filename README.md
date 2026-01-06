@@ -1,39 +1,5 @@
 # PatreonOJ - 在线判题系统
 
-## 项目简介
-
-PatreonOJ 是一个基于 Go + Gin + GORM 的在线判题系统，支持多种数据库类型和评测模式，具有完整的用户管理、题目管理和代码评测功能。
-
-## 核心特性
-
-### 🎯 多数据库支持
-- **MySQL**: 适用于生产环境的高性能数据库
-- **SQLite**: 适用于开发和测试环境的轻量级数据库
-
-### ⚙️ 配置管理
-- 使用 Viper 进行配置管理
-- 支持 YAML 格式配置文件
-- 支持环境变量和默认值
-
-### 🔧 灵活配置
-- 数据库类型可配置切换
-- 服务器端口和运行模式可配置
-- 评测服务参数可配置
-- 日志级别和格式可配置
-
-### 📝 测试用例管理
-- 完整的测试用例CRUD操作
-- 支持单个和批量添加测试用例
-- 支持按题目筛选查询测试用例
-- 支持隐藏测试用例功能
-- 与评测系统完全集成
-
-### 🏃‍♂️ 双模式评测系统
-- **本地评测**: 支持Go、Python、C++、Java等多种语言的本地编译执行
-- **远程评测**: 支持调用外部评测API服务
-- **沙箱隔离**: 本地评测采用沙箱机制确保安全性
-- **实时监控**: 支持内存、时间、输出大小限制
-
 ## 快速开始
 
 ### 1. 安装依赖
@@ -71,7 +37,7 @@ database:
 
 ### 3. 配置评测系统
 
-#### 本地评测模式（推荐）
+#### 本地评测模式
 ```yaml
 judge:
   mode: "local"  # 使用本地评测
@@ -89,13 +55,7 @@ judge:
 ```
 
 #### 远程评测模式
-```yaml
-judge:
-  mode: "remote"  # 使用远程API评测
-  api_url: "http://your-judge-service-api"
-  timeout: 15  # 超时时间（秒）
-  queue_size: 100  # 队列大小
-```
+暂不支持
 
 ### 4. 启动服务
 
@@ -138,10 +98,7 @@ go build -o PatreonOJ.exe cmd/PatreonOJ/main.go
 - `judge.local.supported_languages`: 支持的编程语言列表
 
 ### 日志配置
-- `log.level`: 日志级别（debug/info/warn/error）
-- `log.format`: 日志格式（json/text）
-- `log.output`: 日志输出（stdout/file）
-- `log.file_path`: 日志文件路径（仅文件输出模式需要）
+暂不支持
 
 ## API 接口
 
@@ -176,8 +133,42 @@ go build -o PatreonOJ.exe cmd/PatreonOJ/main.go
 }
 ```
 
+### 用户态数据
+- `GET /user/:uuid?operator_uuid=...` - 获取用户信息
+- `PUT /user/:uuid?operator_uuid=...` - 更新用户信息
+- `GET /user/:uuid/mastery/questions?operator_uuid=...` - 查询题目掌握度（分页/筛选/排序）
+- `GET /user/:uuid/mastery/tags?operator_uuid=...` - 查询标签掌握度（分页/筛选/排序）
+- `POST /user/:uuid/mastery/events?operator_uuid=...` - 提交学习事件（写入掌握度）
+- `DELETE /user/:uuid/mastery/questions/:number?operator_uuid=...` - 重置某题掌握度
+- `DELETE /user/:uuid/mastery/tags?tag=xxx&operator_uuid=...` - 重置某标签掌握度
+
+**更新用户信息** `PUT /user/:uuid?operator_uuid=...`
+```json
+{
+  "nickname": "新昵称",
+  "email": "a@b.com",
+  "avatar_url": "https://..."
+}
+```
+
+**查询题目掌握度** `GET /user/:uuid/mastery/questions?operator_uuid=...&pageIdx=1&pageSize=20&min_mastery=0.5&sort=mastery&order=desc`
+
+**提交学习事件** `POST /user/:uuid/mastery/events?operator_uuid=...`
+```json
+{
+  "question_number": 1001,
+  "accepted": true
+}
+```
+
+**常见错误**
+- `403`: 无权限（operator_uuid 不是本人且无 admin 权限）
+- `404`: 用户不存在 / 题目不存在
+- `400`: 参数错误（例如 status 非 active/disabled）
+
 ### 题目管理
 - `GET /question/` - 获取题目列表（按题目编号排序）
+  可以通过 q 参数来搜索，例如 /question?q=12
 - `GET /question/:number` - 通过题目编号获取单个题目详情
 - `POST /question/` - 创建题目
 - `POST /question/:number` - 更新题目（使用题目编号）
@@ -189,21 +180,13 @@ go build -o PatreonOJ.exe cmd/PatreonOJ/main.go
 完整版示例（包含所有可选字段）：
 ```json
 {
-    "question_number": 1001,
+    "question_id": "p1001",
     "title": "两数之和",
     "content": "给定一个整数数组 nums 和一个整数目标值 target，请你在该数组中找出和为目标值 target 的那两个整数，并返回它们的数组下标。",
     "difficulty": "简单",
-    "input_format": "第一行包含一个整数 n，表示数组长度。\n第二行包含 n 个整数，表示数组元素。\n第三行包含一个整数 target，表示目标值。",
-    "output_format": "输出两个整数，表示两个数的下标（从0开始）。",
-    "sample_input": "4\n2 7 11 15\n9",
-    "sample_output": "0 1",
-    "sample_explanation": "因为 nums[0] + nums[1] = 2 + 7 = 9，所以返回 [0, 1]。",
-    "data_range": "2 ≤ n ≤ 10^4\n-10^9 ≤ nums[i] ≤ 10^9\n-10^9 ≤ target ≤ 10^9",
     "time_limit": 1000,
     "memory_limit": 128,
-    "source": "LeetCode",
     "tags": "数组,哈希表",
-    "hint": "可以使用哈希表来优化查找过程",
     "category_id": 1,
     "status": "published"
 }
@@ -219,22 +202,14 @@ go build -o PatreonOJ.exe cmd/PatreonOJ/main.go
 ```
 
 **字段说明：**
-- `question_number`: 题目编号（可选，不提供时自动从1001开始递增）
+- `question_id`: 题目ID（必填）
 - `title`: 题目标题（必填）
 - `content`: 题目描述（必填）
 - `difficulty`: 难度等级（必填）
-- `input_format`: 输入格式说明（可选）
-- `output_format`: 输出格式说明（可选）
-- `sample_input`: 样例输入（可选）
-- `sample_output`: 样例输出（可选）
-- `sample_explanation`: 样例解释（可选）
-- `data_range`: 数据范围约束（可选）
-- `time_limit`: 时间限制，单位毫秒（可选，默认2000）
-- `memory_limit`: 内存限制，单位MB（可选，默认256）
-- `source`: 题目来源（可选）
+- `time_limit`: 时间限制，单位毫秒（可选，默认1000）
+- `memory_limit`: 内存限制，单位MB（可选，默认128）
 - `tags`: 题目标签，逗号分隔（可选）
-- `hint`: 提示信息（可选）
-- `status`: 题目状态（可选，默认"draft"，可选值：draft/published/archived）
+- `status`: 题目状态（可选，默认"published"，可选值：published/hint）
 - `category_id`: 分类ID（可选）
 
 **更新题目** `POST /question/:number`
@@ -251,6 +226,8 @@ go build -o PatreonOJ.exe cmd/PatreonOJ/main.go
     "category_id": 2
 }
 ```
+
+**获取最近题目** `GET /question/new`
 
 ### 分类管理
 - `GET /category/` - 获取分类列表
@@ -273,11 +250,266 @@ go build -o PatreonOJ.exe cmd/PatreonOJ/main.go
 }
 ```
 
+**删除分类** `DELETE /category/delete`
+```json
+{
+    "id": 1,
+    "uuid": "xxx" // 账号uuid
+}
+```
+
 ### 关系管理
 - `GET /relation/` - 获取关系列表
 
+**调用示例**：`GET /relation/`
+
+**响应示例**：
+```json
+{
+  "result": [
+    {
+      "id": 1,
+      "source_id": 10,
+      "target_id": 12,
+      "relation": "PREREQUISITE"
+    }
+  ]
+}
+```
+
 ### 节点管理
 - `GET /node/` - 获取节点列表
+
+**调用示例**：`GET /node/`
+
+**响应示例**：
+```json
+{
+  "result": [
+    {
+      "id": 1,
+      "name": "数组",
+      "type": "tag",
+      "content": "数组相关基础概念"
+    }
+  ]
+}
+```
+
+### 知识图谱（Neo4j）
+说明：以下接口仅在 Neo4j 连接初始化成功时才会注册（否则 `/graph/*` 不可用）。题目标识使用 `question_number`（如 1001）。
+
+- `POST /graph/questions/:number/sync` - 同步题目节点 + 标签节点/边 + 同标签题目边（写入 Neo4j）
+
+说明：该接口会将题目写入 `(:Question)`，并根据题目 `tags` 自动：
+- 创建/更新 `(:Skill)` 节点
+- 建立 `(Question)-[:HAS_SKILL]->(Skill)` 边（auto=true）
+- 建立题目间 `(:Question)-[:TAG_SIMILAR]->(:Question)` 边（auto=true，weight=共同标签数量）
+
+**调用示例**：`POST /graph/questions/1001/sync`
+
+**响应示例**：
+```json
+{ "message": "题目、标签及同标签关系同步成功" }
+```
+
+- `POST /graph/relations` - 创建题目关系边
+
+**请求示例**：
+```json
+{
+  "from_question": 1001,
+  "to_question": 1002,
+  "relation_type": "PREREQUISITE",
+  "weight": 0.9,
+  "description": "1001 是 1002 的前置基础"
+}
+```
+
+**响应示例**：
+```json
+{ "message": "关系创建成功" }
+```
+
+- `DELETE /graph/relations` - 删除题目关系边
+
+**请求示例**：
+```json
+{
+  "from_question": 1001,
+  "to_question": 1002,
+  "relation_type": "PREREQUISITE"
+}
+```
+
+**响应示例**：
+```json
+{ "message": "关系删除成功" }
+```
+
+- `GET /graph/questions/:number/prerequisites` - 查询前置题
+
+**调用示例**：`GET /graph/questions/1002/prerequisites`
+
+**响应示例**：
+```json
+{
+  "question_number": 1002,
+  "prerequisites": [
+    {
+      "question_number": 1001,
+      "title": "两数之和",
+      "difficulty": "简单",
+      "tags": "数组,哈希表",
+      "status": "published",
+      "created_at": "2026-01-01T00:00:00Z",
+      "updated_at": "2026-01-01T00:00:00Z"
+    }
+  ]
+}
+```
+
+- `GET /graph/questions/:number/next` - 查询可进阶题
+
+**调用示例**：`GET /graph/questions/1001/next`
+
+**响应示例**：
+```json
+{
+  "question_number": 1001,
+  "next_questions": [
+    {
+      "question_number": 1002,
+      "title": "三数之和",
+      "difficulty": "中等",
+      "tags": "数组,双指针",
+      "status": "published",
+      "created_at": "2026-01-01T00:00:00Z",
+      "updated_at": "2026-01-01T00:00:00Z"
+    }
+  ]
+}
+```
+
+- `GET /graph/questions/:number/recommendations?limit=5` - 获取推荐题目
+
+说明：推荐来源包含三类，会通过 `relation_type` 与 `reason` 区分：
+- `NEXT_LEVEL` / `SIMILAR`：题目之间已有关系边
+- `TAG`：同标签推荐（基于 `(:Question)-[:HAS_SKILL]->(:Skill)<-[:HAS_SKILL]-(:Question)`）
+- `TAG_CO_OCCUR`：共现标签推荐（基于 `(:Skill)-[:SKILL_CO_OCCUR]-(:Skill)` 再回到题目）
+
+**调用示例**：`GET /graph/questions/1001/recommendations?limit=5`
+
+**响应示例**：
+```json
+{
+  "question_number": 1001,
+  "recommendations": [
+    {
+      "question_number": 1002,
+      "title": "三数之和",
+      "difficulty": "中等",
+      "score": 0.82,
+      "reason": "进阶题目",
+      "relation_type": "NEXT_LEVEL"
+    },
+    {
+      "question_number": 1010,
+      "title": "两数之和 II",
+      "difficulty": "简单",
+      "score": 2,
+      "reason": "同标签: 2 个",
+      "relation_type": "TAG"
+    },
+    {
+      "question_number": 1020,
+      "title": "最长上升子序列",
+      "difficulty": "中等",
+      "score": 5,
+      "reason": "共现标签",
+      "relation_type": "TAG_CO_OCCUR"
+    }
+  ]
+}
+```
+
+- `GET /graph/path?start=1001&end=1005` - 查找学习路径（最短路径）
+
+**调用示例**：`GET /graph/path?start=1001&end=1005`
+
+**响应示例**：
+```json
+{
+  "start_question": 1001,
+  "end_question": 1005,
+  "path": [1001, 1002, 1005],
+  "total_weight": 1.7,
+  "path_length": 2
+}
+```
+
+接口说明：
+
+GET /graph/node
+响应字段：
+questions: 全部题目节点（QuestionNode）
+skills: 全部技能/标签节点（SkillNode）
+question_relations: 题目-题目关系（PREREQUISITE/NEXT_LEVEL/SIMILAR/CATEGORY 等）
+question_skill_relations: 题目-技能关系（HAS_SKILL）
+skill_relations: 技能-技能关系（SKILL_CO_OCCUR/SKILL_SUBSUMES）
+edges: 统一边列表（from/to 使用 Q:1001、S:array 形式，便于前端直接绘图）
+count: 题目数量
+skill_count: 技能数量
+edge_count: 边数量
+
+### 智能推荐
+- `POST /api/v1/recommendations` - 智能题目推荐（基于用户掌握度 + Neo4j 知识图谱）
+
+**请求示例（默认模式）**：
+```json
+{
+  "user_id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+  "mode": "default",
+  "limit": 20,
+  "constraints": {
+    "mastery_threshold": 0.7,
+    "difficulty_tolerance": 1,
+    "max_depth": 6
+  }
+}
+```
+
+**请求示例（目标模式）**：
+```json
+{
+  "user_id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+  "mode": "target",
+  "target_question": 1005
+}
+```
+
+**响应示例**：
+```json
+{
+  "recommendations": [
+    {
+      "question_id": "1002",
+      "score": 0.83,
+      "breakdown": {
+        "improvement": 0.9,
+        "consolidation": 0,
+        "diversity": 0.6
+      },
+      "explanation": {
+        "path": ["1001→1002"],
+        "edge_types": ["NEXT_LEVEL"],
+        "edge_weights": [1],
+        "confidence": 0.83
+      }
+    }
+  ]
+}
+```
 
 ### 测试用例管理
 - `GET /testcase/` - 获取测试用例列表
@@ -383,6 +615,99 @@ go build -o PatreonOJ.exe cmd/PatreonOJ/main.go
 - `compile_error`: 编译错误
 - `system_error`: 系统错误
 
+### OJ首页相关路由
+- `GET /overview/getHomeText` - 获取OJ首页文本
+- `POST /overview/updateHomeText` - 更新OJ首页文本
+
+#### POST 接口 JSON 格式
+
+**更新OJ首页文本** `POST /overview/updateHomeText`
+```json
+{
+    "home_text": "更新后的OJ首页文本"
+}
+```
+
+### OSS文件管理
+#### A. 文件上传接口
+*   **URL**: `POST /oss/upload`
+*   **Content-Type**: `multipart/form-data`
+*   **参数**:
+    *   `file`: (必须) 要上传的文件。
+    *   `path`: (可选) 目标目录前缀，如 `problems/1001/`。默认为 `uploads/`。
+*   **响应示例**:
+    ```json
+    {
+        "message": "上传成功",
+        "key": "problems/1001/uuid-filename.txt",
+        "size": 1024,
+        "etag": "..."
+    }
+    ```
+
+前端对接流程
+
+1. 第一步：获取上传链接
+   
+   - 请求： GET /oss/upload-url?filename=input.txt&path=problems/1001/
+   - 响应：
+     ```
+     {
+         "url": "http://minio:9000/
+         bucket/problems/1001/xxx.
+         txt?Signature=...",
+         "key": "problems/1001/xxx.
+         txt"
+     }
+     ```
+2. 第二步：前端直传 MinIO
+   
+   - 前端使用 PUT 方法，将文件二进制流直接发送到 url 。
+   - 注意 ：不要带自定义 Header（除非后端签名时加了）， Content-Type 最好设为文件真实类型或 application/octet-stream 。
+3. 第三步：保存元数据（可选但推荐）
+   
+   - 上传成功后，前端将 key 发送给业务后端（比如创建题目接口），后端将这个 key 存入数据库。
+
+#### B. 目录结构展示接口
+*   **URL**: `GET /oss/files`
+*   **参数**:
+    *   `prefix`: (可选) 目录路径，如 `problems/`。
+    *   `recursive`: (可选) `true` 或 `false`。设为 `false` 时模拟文件夹结构。
+*   **响应示例**:
+    ```json
+    {
+        "prefix": "problems/",
+        "objects": [
+            {
+                "key": "problems/1001/",
+                "size": 0,
+                "is_dir": true,
+                "last_modified": "..."
+            },
+            {
+                "key": "problems/readme.txt",
+                "size": 500,
+                "is_dir": false,
+                "last_modified": "..."
+            }
+        ]
+    }
+    ```
+
+如何使用（前端直传 OSS + commit）
+
+- 约定 key 命名（推荐）： problems/{questionNumber}/{caseNo}.in 、 problems/{questionNumber}/{caseNo}.out
+- 前端用 GET /oss/upload-url 获取预签名 PUT（你们项目里已存在该接口），把 .in/.out 直接上传到 OSS
+- 上传成功后调用后端落库：
+```
+POST /testcase/oss/commit
+{
+  "question_number": 1001,
+  "input_key": "problems/1001/1.in",
+  "output_key": "problems/1001/1.out",
+  "is_hidden": true
+}
+```
 
 ## 项目结构
 

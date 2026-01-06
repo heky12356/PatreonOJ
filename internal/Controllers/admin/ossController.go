@@ -90,9 +90,7 @@ func (oc *OSSController) GetUploadURL(c *gin.Context) {
 	}
 
 	// 构造存储 Key
-	// 如果前端传了完整文件名（带后缀），保留后缀；否则直接用 UUID
-	ext := filepath.Ext(filename)
-	key := prefix + uuid.New().String() + ext
+	key := prefix + filename
 
 	bucket := config.GlobalConfig.OSS.BucketName
 	if bucket == "" {
@@ -126,7 +124,7 @@ func (oc *OSSController) ListFiles(c *gin.Context) {
 
 	ctx := context.Background()
 	// 使用 ListObjectsInfo 获取详细元数据
-	objects, err := oc.ossClient.ListObjects(ctx, bucket, prefix, recursive)
+	objects, err := oc.ossClient.ListObjectsInfo(ctx, bucket, prefix, recursive)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "获取文件列表失败: " + err.Error()})
 		return
