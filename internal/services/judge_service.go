@@ -80,8 +80,27 @@ func (js *JudgeService) JudgeCode(submission *models.Submission) error {
 		return fmt.Errorf("执行评测失败: %w", err)
 	}
 
+	var maxRuntime int64
+	var maxMem int64
+	for _, r := range results {
+		if r.Runtime > maxRuntime {
+			maxRuntime = r.Runtime
+		}
+		if r.MemoryUsage > maxMem {
+			maxMem = r.MemoryUsage
+		}
+	}
+
+	if submission.Language == "" {
+		submission.Language = js.detectLanguage(submission.Code)
+	}
+	if submission.CodeLength == 0 {
+		submission.CodeLength = len(submission.Code)
+	}
+	submission.RuntimeMs = maxRuntime
+	submission.MemoryKB = maxMem
+
 	// 5. 保存结果
-	// 将测试结果序列化为JSON字符串
 	resultsJSON, err := json.Marshal(results)
 	if err != nil {
 		return fmt.Errorf("序列化测试结果失败: %w", err)
@@ -136,11 +155,8 @@ func (js *JudgeService) loadTestCaseIO(ctx context.Context, tc models.TestCase) 
 
 // executeLocalJudgement 执行本地评测
 func (js *JudgeService) executeLocalJudgement(code string, testCases []models.TestCase) ([]models.TestCaseResult, error) {
-	var results []models.TestCaseResult
-
 	// 检测编程语言（简单实现，可以根据代码内容或用户选择来确定）
 	language := js.detectLanguage(code)
-
 	log.Printf("Detected language: %s", language)
 
 	// 检查是否支持该语言
@@ -148,33 +164,49 @@ func (js *JudgeService) executeLocalJudgement(code string, testCases []models.Te
 		return nil, fmt.Errorf("不支持的编程语言: %s", language)
 	}
 
+	inputs := make([]string, 0, len(testCases))
+	expectedList := make([]string, 0, len(testCases))
 	ctx := context.Background()
 	for _, tc := range testCases {
 		input, expected, err := js.loadTestCaseIO(ctx, tc)
 		if err != nil {
 			return nil, err
 		}
+		inputs = append(inputs, input)
+		expectedList = append(expectedList, expected)
+	}
 
-		result, err := js.LocalJudgeService.JudgeCode(code, input, language)
-		if err != nil {
-			result = &models.TestCaseResult{
-				Input:          input,
-				ExpectedOutput: expected,
-				ActualOutput:   fmt.Sprintf("Error: %v", err),
-				IsCorrect:      false,
-				Runtime:        0,
-				MemoryUsage:    0,
-			}
-		} else {
-			result.Input = input
-			result.ExpectedOutput = expected
-			result.IsCorrect = strings.TrimSpace(result.ActualOutput) == expected
-		}
+	batch, err := js.LocalJudgeService.JudgeBatch(code, inputs, language)
+	if err != nil {
+		return nil, err
+	}
+	if len(batch) != len(inputs) {
+		return nil, fmt.Errorf("本地评测结果数量不匹配: got=%d want=%d", len(batch), len(inputs))
+	}
 
-		results = append(results, *result)
+	results := make([]models.TestCaseResult, 0, len(batch))
+	for i := range batch {
+		r := batch[i]
+		r.Input = inputs[i]
+		r.ExpectedOutput = normalizeOutput(expectedList[i])
+		r.IsCorrect = strings.TrimSpace(normalizeOutput(r.ActualOutput)) == r.ExpectedOutput
+		results = append(results, r)
 	}
 
 	return results, nil
+}
+
+// normalizeOutput 标准化输出格式
+func normalizeOutput(s string) string {
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	s = strings.ReplaceAll(s, "\r", "\n")
+	s = strings.TrimSpace(s)
+
+	lines := strings.Split(s, "\n")
+	for i := range lines {
+		lines[i] = strings.TrimRight(lines[i], " \t")
+	}
+	return strings.Join(lines, "\n")
 }
 
 // executeRemoteJudgement 执行远程API评测
@@ -210,6 +242,10 @@ func (js *JudgeService) executeRemoteJudgement(code string, testCases []models.T
 	}
 
 	return results, nil
+}
+
+func (js *JudgeService) DetectLanguage(code string) string {
+	return js.detectLanguage(code)
 }
 
 // detectLanguage 检测编程语言（简单实现）
@@ -259,7 +295,7 @@ func (js *JudgeService) getTestCases(questionID int) ([]models.TestCase, error) 
 		return nil, fmt.Errorf("获取测试用例失败: %w", err)
 	}
 
-	type pair struct{
+	type pair struct {
 		inKey  string
 		outKey string
 	}

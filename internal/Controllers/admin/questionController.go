@@ -1,7 +1,6 @@
 package admin
 
 import (
-	"fmt"
 	"net/http"
 	"strconv"
 
@@ -80,13 +79,46 @@ func (con QuestionController) GetNewProblems(c *gin.Context) {
 
 func (con QuestionController) Store(c *gin.Context) {
 	var question models.Question
+	var request struct {
+		QuestionNumber int `json:"question_number"`
+
+		// 题目id（自定义）
+		QuestionId string `gorm:"type:text" json:"question_id"`
+
+		// 基础信息
+		Title      string `json:"title"`      // 题目标题
+		Content    string `json:"content"`    // 题目描述
+		Difficulty string `json:"difficulty"` // 难度等级
+
+		// 约束条件
+		DataRange   string `json:"data_range"`   // 数据范围
+		TimeLimit   int    `json:"time_limit"`   // 时间限制（毫秒）
+		MemoryLimit int    `json:"memory_limit"` // 内存限制（MB）
+
+		// 元数据
+		Tags string `json:"tags"` // 题目标签（逗号分隔）
+		// 分类关联
+		Category_id string `json:"category_id"`
+		// 状态信息
+		Status string `json:"status"`
+	}
 
 	// 绑定请求体到 Question 模型
-	if err := c.ShouldBindJSON(&question); err != nil {
+	if err := c.ShouldBindJSON(&request); err != nil {
 		c.JSON(400, gin.H{"error": err.Error()})
 		return
 	}
-	fmt.Println(question)
+	// fmt.Println(question)
+	question.Title = request.Title
+	question.QuestionNumber = request.QuestionNumber
+	question.Difficulty = request.Difficulty
+	question.Category_id, _ = strconv.Atoi(request.Category_id)
+	question.Status = request.Status
+	question.TimeLimit = request.TimeLimit
+	question.MemoryLimit = request.MemoryLimit
+	question.Tags = request.Tags
+	question.QuestionId = request.QuestionId
+	question.Content = request.Content
 
 	// 处理题目编号逻辑
 	if question.QuestionNumber == 0 {

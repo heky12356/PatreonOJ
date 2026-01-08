@@ -4,6 +4,7 @@ type OjOverView struct {
 	Id             int    `gorm:"primaryKey;autoIncrement" json:"id"`
 	TotalProlemCnt int    `json:"total_problem_cnt"`
 	HomeText       string `json:"home_text"`
+	Announcement   string `json:"announcement"`
 }
 
 // InitOjOverView 初始化OJ首页数据
@@ -19,6 +20,7 @@ func InitOjOverView() error {
 	defaultView := &OjOverView{
 		TotalProlemCnt: 0,
 		HomeText:       "欢迎来到PatreonOJ",
+		Announcement:   "",
 	}
 	return DB.Create(defaultView).Error
 }

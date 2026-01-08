@@ -2,6 +2,7 @@ package admin
 
 import (
 	"net/http"
+	"strconv"
 
 	"dachuang/internal/models"
 
@@ -11,26 +12,65 @@ import (
 type CategoryController struct{}
 
 func (con CategoryController) Index(c *gin.Context) {
-	//categoryList := []models.Category{}
-	//models.DB.Find(&categoryList)
-	//c.JSON(200, gin.H{
-	// "result":categoryList ,
-	//})
+	var response struct {
+		Code int `json:"code"`
+		Data []struct {
+			Id            int    `json:"id"`
+			Name          string `json:"name"`
+			Slug          string `json:"slug"`
+			ParentID      int    `json:"parent_id"`
+			Description   string `json:"description"`
+			QuestionCount int    `json:"question_count"`
+		} `json:"data"`
+	}
+
 	categoryList := []models.Category{}
 
-	models.DB.Preload("Question").Find(&categoryList)
-	c.JSON(200, gin.H{
-		"result": categoryList,
-	})
+	err := models.DB.Preload("Question").Find(&categoryList).Error
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "获取分类列表失败"})
+		return
+	}
+
+	for _, category := range categoryList {
+		response.Data = append(response.Data, struct {
+			Id            int    `json:"id"`
+			Name          string `json:"name"`
+			Slug          string `json:"slug"`
+			ParentID      int    `json:"parent_id"`
+			Description   string `json:"description"`
+			QuestionCount int    `json:"question_count"`
+		}{
+			Id:            category.Id,
+			Name:          category.Name,
+			Slug:          category.Slug,
+			ParentID:      category.ParentID,
+			Description:   category.Description,
+			QuestionCount: len(category.Question),
+		})
+	}
+
+	response.Code = 200
+	c.JSON(200, response)
 }
 
 func (con CategoryController) Store(c *gin.Context) {
 	// 1. 绑定请求体到 Category 模型
 	var category models.Category
-	if err := c.ShouldBindJSON(&category); err != nil {
+	var request struct {
+		Name        string `json:"name"`
+		Slug        string `json:"slug"`
+		ParentID    string `json:"parent_id"`
+		Description string `json:"description"`
+	}
+	if err := c.ShouldBindJSON(&request); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	category.Name = request.Name
+	category.Slug = request.Slug
+	category.ParentID, _ = strconv.Atoi(request.ParentID)
+	category.Description = request.Description
 
 	// 2. 写入数据库（依赖 models.DB 已初始化）
 	if err := models.DB.Create(&category).Error; err != nil {
@@ -51,11 +91,21 @@ func (con CategoryController) Update(c *gin.Context) {
 	}
 
 	// 2. 绑定请求体到 Category 模型
-	var category models.Category
-	if err := c.ShouldBindJSON(&category); err != nil {
+	var request struct {
+		Name        string `json:"name"`
+		Slug        string `json:"slug"`
+		ParentID    string `json:"parent_id"`
+		Description string `json:"description"`
+	}
+	if err := c.ShouldBindJSON(&request); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	var category models.Category
+	category.Name = request.Name
+	category.Slug = request.Slug
+	category.ParentID, _ = strconv.Atoi(request.ParentID)
+	category.Description = request.Description
 
 	// 3. 查询分类是否存在
 	var existingCategory models.Category

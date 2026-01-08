@@ -35,15 +35,15 @@ judge:
   # 本地评测配置
   local:
     enabled: true
-    sandbox_dir: "./sandbox"  # 沙箱目录
-    max_memory: 128  # 最大内存限制(MB)
-    max_time: 5  # 最大执行时间(秒)
-    max_output_size: 1024  # 最大输出大小(KB)
-    supported_languages:
-      - "go"
-      - "python"
-      - "cpp"
-      - "java"
+    executor: docker
+    sandbox_dir: ./sandbox
+    max_memory: 256
+    max_time: 5
+    max_output_size: 1024
+    docker_image_go: golang:1.22-bookworm
+    docker_image_cpp: gcc:13-bookworm
+    docker_image_python: python:3.12-bookworm
+    docker_image_java: eclipse-temurin:21-jdk
 
 # 图数据库配置
 graph_database:

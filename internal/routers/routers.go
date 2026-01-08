@@ -41,6 +41,12 @@ func RoutersInit(r *gin.Engine, ossClient *oss.OSS, graphService *graph.Question
 		apiV1Router.POST("/recommendations", userCtrl.GetRecommendationsV1)
 	}
 
+	apiRouter := r.Group("/api")
+	{
+		apiRouter.GET("/problems/:question_number/submissions", userCtrl.ListProblemSubmissions)
+		apiRouter.GET("/users/:user_id/submissions", userCtrl.ListUserSubmissions)
+	}
+
 	// 题目相关路由
 	questionRouter := r.Group("/question")
 	{
@@ -130,6 +136,8 @@ func RoutersInit(r *gin.Engine, ossClient *oss.OSS, graphService *graph.Question
 		ojOverViewCtrl := Controllers.NewOjOverViewController(models.DB)
 		ojOverViewRouter.GET("/getHomeText", ojOverViewCtrl.GetHomeText)
 		ojOverViewRouter.POST("/updateHomeText", ojOverViewCtrl.UpdateHomeText)
+		ojOverViewRouter.GET("/getAnnouncement", ojOverViewCtrl.GetAnnouncement)
+		ojOverViewRouter.POST("/updateAnnouncement", ojOverViewCtrl.UpdateAnnouncement)
 	}
 
 	// OSS 相关路由

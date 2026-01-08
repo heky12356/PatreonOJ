@@ -85,6 +85,13 @@ type LocalJudgeConfig struct {
 	MaxTime            int      `mapstructure:"max_time"`
 	MaxOutputSize      int      `mapstructure:"max_output_size"`
 	SupportedLanguages []string `mapstructure:"supported_languages"`
+
+	Executor string `mapstructure:"executor"` // host/docker
+
+	DockerImageGo     string `mapstructure:"docker_image_go"`
+	DockerImageCpp    string `mapstructure:"docker_image_cpp"`
+	DockerImagePython string `mapstructure:"docker_image_python"`
+	DockerImageJava   string `mapstructure:"docker_image_java"`
 }
 
 // LogConfig 日志配置
@@ -145,6 +152,12 @@ func setDefaults() {
 	viper.SetDefault("judge.local.max_time", 5)
 	viper.SetDefault("judge.local.max_output_size", 1024)
 	viper.SetDefault("judge.local.supported_languages", []string{"go", "python", "cpp", "java"})
+
+	viper.SetDefault("judge.local.executor", "host")
+	viper.SetDefault("judge.local.docker_image_go", "golang:1.22-bookworm")
+	viper.SetDefault("judge.local.docker_image_cpp", "gcc:13-bookworm")
+	viper.SetDefault("judge.local.docker_image_python", "python:3.12-bookworm")
+	viper.SetDefault("judge.local.docker_image_java", "eclipse-temurin:21-jdk")
 
 	// 日志默认配置
 	viper.SetDefault("log.level", "info")

@@ -790,6 +790,10 @@ func (s *QuestionGraphService) InitGraph(ctx context.Context, db *gorm.DB) error
 		return fmt.Errorf("同步技能节点失败: %w", err)
 	}
 
+	if err := s.SyncTagSimilarEdges(ctx, now); err != nil {
+		return fmt.Errorf("同步同标签题目关系失败: %w", err)
+	}
+
 	return nil
 }
 
@@ -954,6 +958,45 @@ func (s *QuestionGraphService) BuildTagSimilarEdgesForQuestion(ctx context.Conte
 	params2 := map[string]interface{}{"question_number": questionNumber, "now": now}
 	_, err := s.client.ExecuteWrite(ctx, func(tx neo4j.ManagedTransaction) (interface{}, error) {
 		_, err := tx.Run(ctx, query, params2)
+		return nil, err
+	})
+	return err
+}
+
+// SyncTagSimilarEdges 同步所有题目之间的基于标签的相似关系
+func (s *QuestionGraphService) SyncTagSimilarEdges(ctx context.Context, now time.Time) error {
+	cleanupQuery := `
+		MATCH (:Question)-[r:TAG_SIMILAR {auto: true}]->(:Question)
+		DELETE r
+	`
+	if _, err := s.client.ExecuteWrite(ctx, func(tx neo4j.ManagedTransaction) (interface{}, error) {
+		_, err := tx.Run(ctx, cleanupQuery, nil)
+		return nil, err
+	}); err != nil {
+		return err
+	}
+
+	query := `
+		MATCH (q:Question)-[:HAS_SKILL]->(s:Skill)<-[:HAS_SKILL]-(o:Question)
+		WHERE q.status = 'published' AND o.status = 'published' AND q.question_number < o.question_number
+		WITH q, o, count(DISTINCT s) AS shared
+		WHERE shared > 0
+		MERGE (q)-[r:TAG_SIMILAR]->(o)
+		SET r.weight = toFloat(shared),
+			r.auto = true,
+			r.description = 'shared_tags:' + toString(shared),
+			r.created_at = coalesce(r.created_at, $now),
+			r.updated_at = $now
+		MERGE (o)-[r2:TAG_SIMILAR]->(q)
+		SET r2.weight = toFloat(shared),
+			r2.auto = true,
+			r2.description = 'shared_tags:' + toString(shared),
+			r2.created_at = coalesce(r2.created_at, $now),
+			r2.updated_at = $now
+	`
+	params := map[string]interface{}{"now": now}
+	_, err := s.client.ExecuteWrite(ctx, func(tx neo4j.ManagedTransaction) (interface{}, error) {
+		_, err := tx.Run(ctx, query, params)
 		return nil, err
 	})
 	return err

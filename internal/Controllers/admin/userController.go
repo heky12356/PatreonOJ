@@ -456,8 +456,13 @@ func (uc *UserController) SubmitCode(c *gin.Context) {
 		return
 	}
 
+	lang := ""
+	if uc.judgeService != nil {
+		lang = uc.judgeService.DetectLanguage(submitRequest.Code)
+	}
+
 	// 创建提交记录，使用题目的数据库ID
-	submission := models.NewSubmission(submitRequest.UserID, question.Id, submitRequest.Code)
+	submission := models.NewSubmission(submitRequest.UserID, question.Id, submitRequest.Code, lang)
 
 	if err := uc.db.Create(submission).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "提交创建失败"})
@@ -1348,6 +1353,198 @@ func (uc *UserController) upsertTagMastery(userUUID string, tag string, accepted
 		m.Mastery = float64(m.AcceptedCount) / float64(m.Attempts)
 	}
 	return uc.db.Save(&m).Error
+}
+
+type submissionListItem struct {
+	SubmissionID   string    `json:"submission_id"`
+	UserID         string    `json:"user_id"`
+	QuestionNumber int       `json:"question_number"`
+	SubmittedAt    time.Time `json:"submitted_at"`
+	Status         string    `json:"status"`
+	RuntimeMs      int64     `json:"runtime_ms"`
+	MemoryKB       int64     `json:"memory_kb"`
+	Language       string    `json:"language"`
+	CodeLength     int       `json:"code_length"`
+}
+
+// requireOperatorUUID 从请求头或查询参数中获取操作人UUID
+func (uc *UserController) requireOperatorUUID(c *gin.Context) (string, bool) {
+	op := strings.TrimSpace(c.GetHeader("X-User-UUID"))
+	if op == "" {
+		op = strings.TrimSpace(c.Query("operator_uuid"))
+	}
+	if op == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "未登录"})
+		return "", false
+	}
+
+	var user models.User
+	if err := uc.db.Where("uuid = ?", op).First(&user).Error; err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "无效的登录状态"})
+		return "", false
+	}
+	if user.Status != "" && user.Status != "active" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "用户已被禁用"})
+		return "", false
+	}
+	return op, true
+}
+
+// ListProblemSubmissions 获取题目提交记录（公开）
+func (uc *UserController) ListProblemSubmissions(c *gin.Context) {
+	qn, err := strconv.Atoi(strings.TrimSpace(c.Param("question_number")))
+	if err != nil || qn <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "question_number 无效"})
+		return
+	}
+
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	size, _ := strconv.Atoi(c.DefaultQuery("size", "20"))
+	if page < 1 {
+		page = 1
+	}
+	if size < 1 {
+		size = 20
+	}
+	if size > 100 {
+		size = 100
+	}
+
+	var question models.Question
+	if err := uc.db.Where("question_number = ?", qn).First(&question).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "题目不存在"})
+		return
+	}
+
+	status := strings.TrimSpace(c.Query("status"))
+	language := strings.TrimSpace(c.Query("language"))
+
+	countQ := uc.db.Table("submissions").Joins("JOIN question ON question.id = submissions.question_id").Where("submissions.question_id = ?", question.Id)
+	if status != "" {
+		countQ = countQ.Where("submissions.status = ?", status)
+	}
+	if language != "" {
+		countQ = countQ.Where("submissions.language = ?", language)
+	}
+
+	var total int64
+	if err := countQ.Count(&total).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询失败"})
+		return
+	}
+
+	items := make([]submissionListItem, 0, size)
+	listQ := uc.db.Table("submissions").
+		Select("submissions.id AS submission_id, submissions.user_id, question.question_number, submissions.created_at AS submitted_at, submissions.status, submissions.runtime_ms, submissions.memory_kb, submissions.language, submissions.code_length").
+		Joins("JOIN question ON question.id = submissions.question_id").
+		Where("submissions.question_id = ?", question.Id)
+	if status != "" {
+		listQ = listQ.Where("submissions.status = ?", status)
+	}
+	if language != "" {
+		listQ = listQ.Where("submissions.language = ?", language)
+	}
+	if err := listQ.Order("submissions.created_at desc").Limit(size).Offset(size * (page - 1)).Scan(&items).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询失败"})
+		return
+	}
+
+	pages := int64(0)
+	if total > 0 {
+		pages = int64(math.Ceil(float64(total) / float64(size)))
+	}
+	c.JSON(http.StatusOK, gin.H{"total": total, "page": page, "size": size, "pages": pages, "items": items})
+}
+
+// ListUserSubmissions 获取用户提交记录
+func (uc *UserController) ListUserSubmissions(c *gin.Context) {
+	opUUID, ok := uc.requireOperatorUUID(c)
+	if !ok {
+		return
+	}
+	isAdmin := util.UserInstance.HasPermission(opUUID, "admin")
+
+	targetUUID := strings.TrimSpace(c.Param("user_id"))
+	if targetUUID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "user_id 无效"})
+		return
+	}
+	if opUUID != targetUUID && !isAdmin {
+		c.JSON(http.StatusForbidden, gin.H{"error": "无权限"})
+		return
+	}
+
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	size, _ := strconv.Atoi(c.DefaultQuery("size", "20"))
+	if page < 1 {
+		page = 1
+	}
+	if size < 1 {
+		size = 20
+	}
+	if size > 100 {
+		size = 100
+	}
+
+	status := strings.TrimSpace(c.Query("status"))
+	language := strings.TrimSpace(c.Query("language"))
+
+	var questionID *int
+	if v := strings.TrimSpace(c.Query("problem_id")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			var q models.Question
+			if err := uc.db.Where("question_number = ?", n).First(&q).Error; err == nil {
+				questionID = &q.Id
+			} else {
+				questionID = &n
+			}
+		} else {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "problem_id 无效"})
+			return
+		}
+	}
+
+	countQ := uc.db.Table("submissions").Joins("JOIN question ON question.id = submissions.question_id").Where("submissions.user_id = ?", targetUUID)
+	if questionID != nil {
+		countQ = countQ.Where("submissions.question_id = ?", *questionID)
+	}
+	if status != "" {
+		countQ = countQ.Where("submissions.status = ?", status)
+	}
+	if language != "" {
+		countQ = countQ.Where("submissions.language = ?", language)
+	}
+
+	var total int64
+	if err := countQ.Count(&total).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询失败"})
+		return
+	}
+
+	items := make([]submissionListItem, 0, size)
+	listQ := uc.db.Table("submissions").
+		Select("submissions.id AS submission_id, submissions.user_id, question.question_number, submissions.created_at AS submitted_at, submissions.status, submissions.runtime_ms, submissions.memory_kb, submissions.language, submissions.code_length").
+		Joins("JOIN question ON question.id = submissions.question_id").
+		Where("submissions.user_id = ?", targetUUID)
+	if questionID != nil {
+		listQ = listQ.Where("submissions.question_id = ?", *questionID)
+	}
+	if status != "" {
+		listQ = listQ.Where("submissions.status = ?", status)
+	}
+	if language != "" {
+		listQ = listQ.Where("submissions.language = ?", language)
+	}
+	if err := listQ.Order("submissions.created_at desc").Limit(size).Offset(size * (page - 1)).Scan(&items).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询失败"})
+		return
+	}
+
+	pages := int64(0)
+	if total > 0 {
+		pages = int64(math.Ceil(float64(total) / float64(size)))
+	}
+	c.JSON(http.StatusOK, gin.H{"total": total, "page": page, "size": size, "pages": pages, "items": items})
 }
 
 // canAccessUserState 判断用户是否有权限访问目标用户的状态

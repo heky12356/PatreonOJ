@@ -239,14 +239,20 @@ go build -o PatreonOJ.exe cmd/PatreonOJ/main.go
 **创建分类** `POST /category/`
 ```json
 {
-    "name": "分类名称"
+    "name": "分类名称",
+    "slug": "分类标识",
+    "parent_id": "父分类ID",
+    "description": "分类描述"
 }
 ```
 
 **更新分类** `POST /category/:id`
 ```json
 {
-    "name": "更新后的分类名称"
+    "name": "更新后的分类名称",
+    "slug": "更新后的分类标识",
+    "parent_id": "更新后的父分类ID",
+    "description": "更新后的分类描述"
 }
 ```
 
@@ -615,9 +621,81 @@ edge_count: 边数量
 - `compile_error`: 编译错误
 - `system_error`: 系统错误
 
+### 提交记录查询
+
+说明：
+- 题目提交记录查询接口为公开接口，不需要身份验证；默认游客状态下可查看该题的全部提交记录。
+- 个人提交记录查询接口需要身份验证。当前版本支持两种方式传递登录身份（二选一）：
+  - 请求头：`X-User-UUID: <用户UUID>`
+  - 查询参数：`operator_uuid=<用户UUID>`
+
+#### 1) 题目提交记录查询（公开）
+- `GET /api/problems/:question_number/submissions`
+
+**查询参数：**
+- 必选：`question_number`（路径参数）
+- 可选：
+  - `page`（默认 1）
+  - `size`（默认 20，最大 100）
+  - `status`（筛选提交状态）
+  - `language`（筛选语言）
+
+**权限规则：**
+- 无需登录，所有访问者默认可查看该题全部提交记录
+
+**请求示例：**
+```bash
+curl "http://localhost:8080/api/problems/1001/submissions?page=1&size=20&status=completed&language=go"
+```
+
+#### 2) 个人提交记录查询
+- `GET /api/users/:user_id/submissions`
+
+**查询参数：**
+- 必选：`user_id`（路径参数，用户UUID）
+- 可选：
+  - `problem_id`（筛选题目；支持题目编号 question_number 或内部题目ID）
+  - `page`（默认 1）
+  - `size`（默认 20，最大 100）
+  - `status`（筛选提交状态）
+  - `language`（筛选语言）
+
+**权限规则：**
+- 仅可查看自己的提交；管理员可查看任意用户
+
+**请求示例：**
+```bash
+curl -H "X-User-UUID: <你的UUID>" "http://localhost:8080/api/users/<你的UUID>/submissions?page=1&size=20"
+```
+
+#### 响应结构（两者一致）
+```json
+{
+  "total": 123,
+  "page": 1,
+  "size": 20,
+  "pages": 7,
+  "items": [
+    {
+      "submission_id": "550e8400-e29b-41d4-a716-446655440000",
+      "user_id": "用户UUID",
+      "question_number": 1001,
+      "submitted_at": "2026-01-01T12:00:00Z",
+      "status": "completed",
+      "runtime_ms": 12,
+      "memory_kb": 2048,
+      "language": "go",
+      "code_length": 345
+    }
+  ]
+}
+```
+
 ### OJ首页相关路由
 - `GET /overview/getHomeText` - 获取OJ首页文本
 - `POST /overview/updateHomeText` - 更新OJ首页文本
+- `GET /overview/getAnnouncement` - 获取公告
+- `POST /overview/updateAnnouncement` - 更新公告
 
 #### POST 接口 JSON 格式
 
@@ -625,6 +703,13 @@ edge_count: 边数量
 ```json
 {
     "home_text": "更新后的OJ首页文本"
+}
+```
+
+**更新公告** `POST /overview/updateAnnouncement`
+```json
+{
+    "announcement": "更新后的公告内容"
 }
 ```
 
