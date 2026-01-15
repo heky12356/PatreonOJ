@@ -16,7 +16,7 @@ database:
 # OSS 配置
 oss:
   address: "localhost:9090"
-  public_address: "localhost:9090" // 公网地址，用于生成前端访问URL
+  public_address: "localhost:9090"  # 公网地址，用于生成前端访问URL
   access_key: "heky"
   secret_key: "heky00172"
   bucket_name: "patreon-oj-cases"
