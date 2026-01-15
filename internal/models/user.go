@@ -9,8 +9,8 @@ import (
 // User 用户模型
 type User struct {
 	Id          int    `gorm:"primaryKey;autoIncrement" json:"id"`
-	Username    string `gorm:"uniqueIndex;not null" json:"username"`
-	Password    string `gorm:"not null" json:"-"`
+	Username    string `gorm:"type:varchar(64);uniqueIndex;not null" json:"username"`
+	Password    string `gorm:"type:varchar(255);not null" json:"-"`
 	UUID        string `gorm:"size:36;uniqueIndex;not null" json:"uuid"`
 	Nickname    string `gorm:"type:varchar(64)" json:"nickname"`
 	Email       string `gorm:"type:varchar(255)" json:"email"`
@@ -28,7 +28,7 @@ type User struct {
 // Role 角色模型
 type Role struct {
 	ID          uint   `gorm:"primaryKey;autoIncrement" json:"id"`
-	Name        string `gorm:"uniqueIndex;not null" json:"name"`
+	Name        string `gorm:"type:varchar(64);uniqueIndex;not null" json:"name"`
 	Description string `gorm:"type:text" json:"description"`
 
 	Permissions []Permission `gorm:"many2many:role_permission;" json:"permissions"`
@@ -41,7 +41,7 @@ type Role struct {
 // Permission 权限模型
 type Permission struct {
 	ID          uint   `gorm:"primaryKey;autoIncrement" json:"id"`
-	Code        string `gorm:"uniqueIndex;not null" json:"code"`
+	Code        string `gorm:"type:varchar(128);uniqueIndex;not null" json:"code"`
 	Description string `gorm:"type:text" json:"description"`
 
 	CreatedAt time.Time      `json:"created_at"`
