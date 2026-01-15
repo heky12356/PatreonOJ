@@ -36,6 +36,7 @@ func newMinioClient(address, accessKey, secretKey string) (*minio.Client, error)
 	return minio.New(endpoint, &minio.Options{
 		Creds:  credentials.NewStaticV4(accessKey, secretKey, ""),
 		Secure: secure,
+		Region: "us-east-1",
 	})
 }
 
