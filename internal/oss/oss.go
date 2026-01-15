@@ -13,14 +13,14 @@ import (
 )
 
 type OSS struct {
-	cli *minio.Client
+	cli       *minio.Client
+	presignCli *minio.Client
 }
 
-func NewOSSClient(address, accessKey, secretKey string) (*OSS, error) {
+func newMinioClient(address, accessKey, secretKey string) (*minio.Client, error) {
 	endpoint := address
 	secure := false
 
-	// 解析地址中的协议头
 	if strings.HasPrefix(address, "http://") || strings.HasPrefix(address, "https://") {
 		u, err := url.Parse(address)
 		if err != nil {
@@ -33,14 +33,27 @@ func NewOSSClient(address, accessKey, secretKey string) (*OSS, error) {
 		secure = u.Scheme == "https"
 	}
 
-	cli, err := minio.New(endpoint, &minio.Options{
+	return minio.New(endpoint, &minio.Options{
 		Creds:  credentials.NewStaticV4(accessKey, secretKey, ""),
 		Secure: secure,
 	})
+}
+
+func NewOSSClient(address, publicAddress, accessKey, secretKey string) (*OSS, error) {
+	cli, err := newMinioClient(address, accessKey, secretKey)
 	if err != nil {
 		return nil, err
 	}
-	return &OSS{cli: cli}, nil
+
+	presignCli := cli
+	if strings.TrimSpace(publicAddress) != "" {
+		presignCli, err = newMinioClient(publicAddress, accessKey, secretKey)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return &OSS{cli: cli, presignCli: presignCli}, nil
 }
 
 // CreateBucket 创建存储桶（如果不存在）
@@ -90,7 +103,7 @@ func (o *OSS) GetObjectBytes(ctx context.Context, bucket, key string) ([]byte, e
 // PresignGet 生成预签名下载链接
 func (o *OSS) PresignGet(ctx context.Context, bucket, key string, ttl time.Duration) (string, error) {
 	reqParams := make(url.Values)
-	u, err := o.cli.PresignedGetObject(ctx, bucket, key, ttl, reqParams)
+	u, err := o.presignCli.PresignedGetObject(ctx, bucket, key, ttl, reqParams)
 	if err != nil {
 		return "", err
 	}
@@ -99,7 +112,7 @@ func (o *OSS) PresignGet(ctx context.Context, bucket, key string, ttl time.Durat
 
 // PresignPut 生成预签名上传链接
 func (o *OSS) PresignPut(ctx context.Context, bucket, key string, ttl time.Duration) (string, error) {
-	u, err := o.cli.PresignedPutObject(ctx, bucket, key, ttl)
+	u, err := o.presignCli.PresignedPutObject(ctx, bucket, key, ttl)
 	if err != nil {
 		return "", err
 	}

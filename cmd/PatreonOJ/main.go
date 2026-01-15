@@ -49,7 +49,12 @@ func main() {
 	}
 
 	// 初始化OSS客户端
-	ossClient, err := oss.NewOSSClient(config.GlobalConfig.OSS.Address, config.GlobalConfig.OSS.AccessKey, config.GlobalConfig.OSS.SecretKey)
+	ossClient, err := oss.NewOSSClient(
+		config.GlobalConfig.OSS.Address,
+		config.GlobalConfig.OSS.PublicAddress,
+		config.GlobalConfig.OSS.AccessKey,
+		config.GlobalConfig.OSS.SecretKey,
+	)
 	if err != nil {
 		log.Fatalf("OSS初始化失败: %v", err)
 	} else {

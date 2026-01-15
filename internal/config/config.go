@@ -19,10 +19,11 @@ type Config struct {
 
 // OSSConfig OSS配置
 type OSSConfig struct {
-	Address    string `mapstructure:"address"`
-	AccessKey  string `mapstructure:"access_key"`
-	SecretKey  string `mapstructure:"secret_key"`
-	BucketName string `mapstructure:"bucket_name"`
+	Address       string `mapstructure:"address"`
+	PublicAddress string `mapstructure:"public_address"`
+	AccessKey     string `mapstructure:"access_key"`
+	SecretKey     string `mapstructure:"secret_key"`
+	BucketName    string `mapstructure:"bucket_name"`
 }
 
 // DatabaseConfig 数据库配置
