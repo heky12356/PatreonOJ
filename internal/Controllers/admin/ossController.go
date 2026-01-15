@@ -3,7 +3,10 @@ package admin
 import (
 	"context"
 	"net/http"
+	"net/url"
+	"path"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"dachuang/internal/config"
@@ -99,14 +102,25 @@ func (oc *OSSController) GetUploadURL(c *gin.Context) {
 
 	ctx := context.Background()
 	// 生成有效期为 10 分钟的预签名 PUT URL
-	url, err := oc.ossClient.PresignPut(ctx, bucket, key, 10*time.Minute)
+	presignedURL, err := oc.ossClient.PresignPut(ctx, bucket, key, 10*time.Minute)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "生成上传链接失败: " + err.Error()})
 		return
 	}
 
+	publicPrefix := strings.TrimSpace(config.GlobalConfig.OSS.PublicPathPrefix)
+	if publicPrefix != "" {
+		if !strings.HasPrefix(publicPrefix, "/") {
+			publicPrefix = "/" + publicPrefix
+		}
+		if u, err := url.Parse(presignedURL); err == nil {
+			u.Path = path.Join(publicPrefix, u.Path)
+			presignedURL = u.String()
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{
-		"url": url,
+		"url": presignedURL,
 		"key": key,
 	})
 }
