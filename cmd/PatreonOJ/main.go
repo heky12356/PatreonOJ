@@ -70,6 +70,14 @@ func main() {
 		} else {
 			log.Printf("OSS存储桶检查/创建成功: %s", bucketName)
 		}
+
+		if len(config.GlobalConfig.OSS.PublicReadPrefixes) > 0 {
+			if err := ossClient.SetPublicReadPrefixes(ctx, bucketName, config.GlobalConfig.OSS.PublicReadPrefixes); err != nil {
+				log.Printf("Warning: 设置OSS桶公开读策略失败: %v", err)
+			} else {
+				log.Printf("OSS桶公开读策略设置成功: %v", config.GlobalConfig.OSS.PublicReadPrefixes)
+			}
+		}
 	}
 
 	var graphService *graph.QuestionGraphService

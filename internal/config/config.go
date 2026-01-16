@@ -19,12 +19,13 @@ type Config struct {
 
 // OSSConfig OSS配置
 type OSSConfig struct {
-	Address          string `mapstructure:"address"`
-	PublicAddress    string `mapstructure:"public_address"`
-	PublicPathPrefix string `mapstructure:"public_path_prefix"`
-	AccessKey        string `mapstructure:"access_key"`
-	SecretKey        string `mapstructure:"secret_key"`
-	BucketName       string `mapstructure:"bucket_name"`
+	Address            string   `mapstructure:"address"`
+	PublicAddress      string   `mapstructure:"public_address"`
+	PublicPathPrefix   string   `mapstructure:"public_path_prefix"`
+	PublicReadPrefixes []string `mapstructure:"public_read_prefixes"`
+	AccessKey          string   `mapstructure:"access_key"`
+	SecretKey          string   `mapstructure:"secret_key"`
+	BucketName         string   `mapstructure:"bucket_name"`
 }
 
 // DatabaseConfig 数据库配置
@@ -160,6 +161,9 @@ func setDefaults() {
 	viper.SetDefault("judge.local.docker_image_cpp", "gcc:13-bookworm")
 	viper.SetDefault("judge.local.docker_image_python", "python:3.12-bookworm")
 	viper.SetDefault("judge.local.docker_image_java", "eclipse-temurin:21-jdk")
+
+	// Oss默认公开读取前缀
+	viper.SetDefault("oss.public_read_prefixes", []string{})
 
 	// 日志默认配置
 	viper.SetDefault("log.level", "info")

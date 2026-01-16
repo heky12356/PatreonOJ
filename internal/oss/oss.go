@@ -2,7 +2,9 @@ package oss
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/url"
 	"strings"
@@ -13,7 +15,7 @@ import (
 )
 
 type OSS struct {
-	cli       *minio.Client
+	cli        *minio.Client
 	presignCli *minio.Client
 }
 
@@ -118,6 +120,75 @@ func (o *OSS) PresignPut(ctx context.Context, bucket, key string, ttl time.Durat
 		return "", err
 	}
 	return u.String(), nil
+}
+
+// SetPublicReadPrefixes 设置公开读权限
+type bucketPolicy struct {
+	Version   string            `json:"Version"`
+	Statement []policyStatement `json:"Statement"`
+}
+
+// policyStatement 策略语句
+type policyStatement struct {
+	Effect    string `json:"Effect"`
+	Principal any    `json:"Principal"`
+	Action    any    `json:"Action"`
+	Resource  any    `json:"Resource"`
+}
+
+// normalizePublicReadPrefix 标准化公开读前缀
+func normalizePublicReadPrefix(prefix string) string {
+	p := strings.TrimSpace(prefix)
+	p = strings.TrimPrefix(p, "/")
+	if p == "" {
+		return ""
+	}
+	if !strings.HasSuffix(p, "/") {
+		p += "/"
+	}
+	return p
+}
+
+// SetPublicReadPrefixes 设置公开读权限
+// prefixes: 公开读前缀列表（会自动添加 / 前缀）
+func (o *OSS) SetPublicReadPrefixes(ctx context.Context, bucket string, prefixes []string) error {
+	resources := make([]string, 0, len(prefixes))
+	seen := make(map[string]struct{}, len(prefixes))
+	for _, p := range prefixes {
+		p = normalizePublicReadPrefix(p)
+		if p == "" {
+			continue
+		}
+		arn := fmt.Sprintf("arn:aws:s3:::%s/%s*", bucket, p)
+		if _, ok := seen[arn]; ok {
+			continue
+		}
+		seen[arn] = struct{}{}
+		resources = append(resources, arn)
+	}
+
+	if len(resources) == 0 {
+		return nil
+	}
+
+	policy := bucketPolicy{
+		Version: "2012-10-17",
+		Statement: []policyStatement{
+			{
+				Effect:    "Allow",
+				Principal: "*",
+				Action:    []string{"s3:GetObject"},
+				Resource:  resources,
+			},
+		},
+	}
+
+	b, err := json.Marshal(policy)
+	if err != nil {
+		return err
+	}
+
+	return o.cli.SetBucketPolicy(ctx, bucket, string(b))
 }
 
 // ListObjects 列出指定前缀下的对象
