@@ -4,11 +4,12 @@ import "time"
 
 // QuestionNode 题目节点结构
 type QuestionNode struct {
-	QuestionNumber int    `json:"question_number"`
-	Title          string `json:"title"`
-	Difficulty     string `json:"difficulty"`
-	Tags           string `json:"tags"`
-	Status         string `json:"status"`
+	QuestionNumber int       `json:"question_number"`
+	QuestionId     string    `json:"question_id"`
+	Title          string    `json:"title"`
+	Difficulty     string    `json:"difficulty"`
+	Tags           string    `json:"tags"`
+	Status         string    `json:"status"`
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`
 }
@@ -39,26 +40,27 @@ type QuestionRelation struct {
 	FromQuestionNumber int              `json:"from_question_number"`
 	ToQuestionNumber   int              `json:"to_question_number"`
 	RelationType       RelationshipType `json:"relation_type"`
-	Weight             float64          `json:"weight"`     // 关系权重，用于推荐算法
+	Weight             float64          `json:"weight"`      // 关系权重，用于推荐算法
 	Description        string           `json:"description"` // 关系描述
 	CreatedAt          time.Time        `json:"created_at"`
 }
 
 // LearningPath 学习路径结构
 type LearningPath struct {
-	StartQuestion int   `json:"start_question"`
-	EndQuestion   int   `json:"end_question"`
-	Path          []int `json:"path"`
+	StartQuestion int     `json:"start_question"`
+	EndQuestion   int     `json:"end_question"`
+	Path          []int   `json:"path"`
 	TotalWeight   float64 `json:"total_weight"`
-	PathLength    int   `json:"path_length"`
+	PathLength    int     `json:"path_length"`
 }
 
 // RecommendationResult 推荐结果结构
 type RecommendationResult struct {
-	QuestionNumber int     `json:"question_number"`
-	Title          string  `json:"title"`
-	Difficulty     string  `json:"difficulty"`
-	Score          float64 `json:"score"`          // 推荐分数
-	Reason         string  `json:"reason"`         // 推荐理由
+	QuestionNumber int              `json:"question_number"`
+	QuestionId     string           `json:"question_id"`
+	Title          string           `json:"title"`
+	Difficulty     string           `json:"difficulty"`
+	Score          float64          `json:"score"`  // 推荐分数
+	Reason         string           `json:"reason"` // 推荐理由
 	RelationType   RelationshipType `json:"relation_type"`
 }

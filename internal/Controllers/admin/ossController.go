@@ -120,8 +120,9 @@ func (oc *OSSController) GetUploadURL(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"url": presignedURL,
-		"key": key,
+		"url":    presignedURL,
+		"key":    key,
+		"bucket": bucket,
 	})
 }
 

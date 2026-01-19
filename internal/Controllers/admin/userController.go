@@ -1285,7 +1285,7 @@ func (uc *UserController) recordMastery(userUUID string, question models.Questio
 	if userUUID == "" || question.QuestionNumber == 0 {
 		return nil
 	}
-	if err := uc.upsertQuestionMastery(userUUID, question.QuestionNumber, accepted, now); err != nil {
+	if err := uc.upsertQuestionMastery(userUUID, question.QuestionNumber, question.QuestionId, accepted, now); err != nil {
 		return err
 	}
 	for _, tag := range splitTags(question.Tags) {
@@ -1309,7 +1309,7 @@ func splitTags(tags string) []string {
 }
 
 // upsertQuestionMastery 更新或插入用户对题目掌握度
-func (uc *UserController) upsertQuestionMastery(userUUID string, questionNumber int, accepted bool, now time.Time) error {
+func (uc *UserController) upsertQuestionMastery(userUUID string, questionNumber int, questionID string, accepted bool, now time.Time) error {
 	var m models.UserQuestionMastery
 	err := uc.db.Where("user_uuid = ? AND question_number = ?", userUUID, questionNumber).First(&m).Error
 	if err != nil {
@@ -1317,6 +1317,15 @@ func (uc *UserController) upsertQuestionMastery(userUUID string, questionNumber 
 			return err
 		}
 		m = models.UserQuestionMastery{UserUUID: userUUID, QuestionNumber: questionNumber}
+	}
+	if len(questionID) > 36 {
+		questionID = questionID[:36]
+	}
+	if questionID == "" {
+		questionID = strconv.Itoa(questionNumber)
+	}
+	if m.QuestionId != questionID {
+		m.QuestionId = questionID
 	}
 	m.Attempts++
 	m.LastSubmittedAt = &now

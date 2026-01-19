@@ -30,6 +30,7 @@ func (s *QuestionGraphService) ListQuestions(ctx context.Context) ([]QuestionNod
 	query := `
 		MATCH (q:Question)
 		RETURN q.question_number as question_number,
+			   coalesce(q.question_id, '') as question_id,
 			   q.title as title,
 			   q.difficulty as difficulty,
 			   q.tags as tags,
@@ -50,23 +51,24 @@ func (s *QuestionGraphService) ListQuestions(ctx context.Context) ([]QuestionNod
 			record := result.Record()
 
 			var createdAt, updatedAt time.Time
-			if record.Values[5] != nil {
-				if t, ok := record.Values[5].(time.Time); ok {
+			if record.Values[6] != nil {
+				if t, ok := record.Values[6].(time.Time); ok {
 					createdAt = t
 				}
 			}
-			if record.Values[6] != nil {
-				if t, ok := record.Values[6].(time.Time); ok {
+			if record.Values[7] != nil {
+				if t, ok := record.Values[7].(time.Time); ok {
 					updatedAt = t
 				}
 			}
 
 			question := QuestionNode{
 				QuestionNumber: int(record.Values[0].(int64)),
-				Title:          record.Values[1].(string),
-				Difficulty:     record.Values[2].(string),
-				Tags:           record.Values[3].(string),
-				Status:         record.Values[4].(string),
+				QuestionId:     record.Values[1].(string),
+				Title:          record.Values[2].(string),
+				Difficulty:     record.Values[3].(string),
+				Tags:           record.Values[4].(string),
+				Status:         record.Values[5].(string),
 				CreatedAt:      createdAt,
 				UpdatedAt:      updatedAt,
 			}
@@ -313,6 +315,7 @@ func (s *QuestionGraphService) CreateOrUpdateQuestion(ctx context.Context, quest
 	query := `
 		MERGE (q:Question {question_number: $question_number})
 		ON CREATE SET 
+			q.question_id = $question_id,
 			q.title = $title,
 			q.difficulty = $difficulty,
 			q.tags = $tags,
@@ -320,6 +323,7 @@ func (s *QuestionGraphService) CreateOrUpdateQuestion(ctx context.Context, quest
 			q.created_at = $created_at,
 			q.updated_at = $updated_at
 		ON MATCH SET 
+			q.question_id = $question_id,
 			q.title = $title,
 			q.difficulty = $difficulty,
 			q.tags = $tags,
@@ -329,6 +333,7 @@ func (s *QuestionGraphService) CreateOrUpdateQuestion(ctx context.Context, quest
 
 	params := map[string]interface{}{
 		"question_number": question.QuestionNumber,
+		"question_id":     question.QuestionId,
 		"title":           question.Title,
 		"difficulty":      question.Difficulty,
 		"tags":            question.Tags,
@@ -415,8 +420,14 @@ func (s *QuestionGraphService) DeleteRelation(ctx context.Context, fromQuestion,
 func (s *QuestionGraphService) GetPrerequisites(ctx context.Context, questionNumber int) ([]QuestionNode, error) {
 	query := `
 		MATCH (pre:Question)-[:PREREQUISITE]->(q:Question {question_number: $question_number})
-		RETURN pre.question_number as question_number, pre.title as title, pre.difficulty as difficulty, 
-			   pre.tags as tags, pre.status as status, pre.created_at as created_at, pre.updated_at as updated_at
+		RETURN pre.question_number as question_number,
+			   coalesce(pre.question_id, '') as question_id,
+			   pre.title as title,
+			   pre.difficulty as difficulty, 
+			   pre.tags as tags,
+			   pre.status as status,
+			   pre.created_at as created_at,
+			   pre.updated_at as updated_at
 		ORDER BY pre.question_number
 	`
 
@@ -436,23 +447,24 @@ func (s *QuestionGraphService) GetPrerequisites(ctx context.Context, questionNum
 
 			// 安全地处理时间字段
 			var createdAt, updatedAt time.Time
-			if record.Values[5] != nil {
-				if t, ok := record.Values[5].(time.Time); ok {
+			if record.Values[6] != nil {
+				if t, ok := record.Values[6].(time.Time); ok {
 					createdAt = t
 				}
 			}
-			if record.Values[6] != nil {
-				if t, ok := record.Values[6].(time.Time); ok {
+			if record.Values[7] != nil {
+				if t, ok := record.Values[7].(time.Time); ok {
 					updatedAt = t
 				}
 			}
 
 			question := QuestionNode{
 				QuestionNumber: int(record.Values[0].(int64)),
-				Title:          record.Values[1].(string),
-				Difficulty:     record.Values[2].(string),
-				Tags:           record.Values[3].(string),
-				Status:         record.Values[4].(string),
+				QuestionId:     record.Values[1].(string),
+				Title:          record.Values[2].(string),
+				Difficulty:     record.Values[3].(string),
+				Tags:           record.Values[4].(string),
+				Status:         record.Values[5].(string),
 				CreatedAt:      createdAt,
 				UpdatedAt:      updatedAt,
 			}
@@ -472,8 +484,14 @@ func (s *QuestionGraphService) GetPrerequisites(ctx context.Context, questionNum
 func (s *QuestionGraphService) GetNextLevelQuestions(ctx context.Context, questionNumber int) ([]QuestionNode, error) {
 	query := `
 		MATCH (q:Question {question_number: $question_number})-[:NEXT_LEVEL]->(next:Question)
-		RETURN next.question_number as question_number, next.title as title, next.difficulty as difficulty,
-			   next.tags as tags, next.status as status, next.created_at as created_at, next.updated_at as updated_at
+		RETURN next.question_number as question_number,
+			   coalesce(next.question_id, '') as question_id,
+			   next.title as title,
+			   next.difficulty as difficulty,
+			   next.tags as tags,
+			   next.status as status,
+			   next.created_at as created_at,
+			   next.updated_at as updated_at
 		ORDER BY next.question_number
 	`
 
@@ -493,23 +511,24 @@ func (s *QuestionGraphService) GetNextLevelQuestions(ctx context.Context, questi
 
 			// 安全地处理时间字段
 			var createdAt, updatedAt time.Time
-			if record.Values[5] != nil {
-				if t, ok := record.Values[5].(time.Time); ok {
+			if record.Values[6] != nil {
+				if t, ok := record.Values[6].(time.Time); ok {
 					createdAt = t
 				}
 			}
-			if record.Values[6] != nil {
-				if t, ok := record.Values[6].(time.Time); ok {
+			if record.Values[7] != nil {
+				if t, ok := record.Values[7].(time.Time); ok {
 					updatedAt = t
 				}
 			}
 
 			question := QuestionNode{
 				QuestionNumber: int(record.Values[0].(int64)),
-				Title:          record.Values[1].(string),
-				Difficulty:     record.Values[2].(string),
-				Tags:           record.Values[3].(string),
-				Status:         record.Values[4].(string),
+				QuestionId:     record.Values[1].(string),
+				Title:          record.Values[2].(string),
+				Difficulty:     record.Values[3].(string),
+				Tags:           record.Values[4].(string),
+				Status:         record.Values[5].(string),
 				CreatedAt:      createdAt,
 				UpdatedAt:      updatedAt,
 			}
@@ -611,6 +630,7 @@ func (s *QuestionGraphService) GetRecommendations(ctx context.Context, questionN
 		ORDER BY score DESC
 		WITH recommended, collect({score: score, relation_type: relation_type, reason: reason})[0] AS best
 		RETURN recommended.question_number as question_number,
+			coalesce(recommended.question_id, '') as question_id,
 			recommended.title as title,
 			recommended.difficulty as difficulty,
 			best.score as score,
@@ -636,7 +656,7 @@ func (s *QuestionGraphService) GetRecommendations(ctx context.Context, questionN
 			record := result.Record()
 
 			var score float64
-			switch v := record.Values[3].(type) {
+			switch v := record.Values[4].(type) {
 			case float64:
 				score = v
 			case int64:
@@ -647,11 +667,12 @@ func (s *QuestionGraphService) GetRecommendations(ctx context.Context, questionN
 
 			recommendation := RecommendationResult{
 				QuestionNumber: int(record.Values[0].(int64)),
-				Title:          record.Values[1].(string),
-				Difficulty:     record.Values[2].(string),
+				QuestionId:     record.Values[1].(string),
+				Title:          record.Values[2].(string),
+				Difficulty:     record.Values[3].(string),
 				Score:          score,
-				RelationType:   RelationshipType(record.Values[4].(string)),
-				Reason:         record.Values[5].(string),
+				RelationType:   RelationshipType(record.Values[5].(string)),
+				Reason:         record.Values[6].(string),
 			}
 			recommendations = append(recommendations, recommendation)
 		}
@@ -691,6 +712,7 @@ func (s *QuestionGraphService) InitGraph(ctx context.Context, db *gorm.DB) error
 	for _, q := range questions {
 		desired := QuestionNode{
 			QuestionNumber: q.QuestionNumber,
+			QuestionId:     q.QuestionId,
 			Title:          q.Title,
 			Difficulty:     q.Difficulty,
 			Tags:           q.Tags,
@@ -800,6 +822,7 @@ func (s *QuestionGraphService) InitGraph(ctx context.Context, db *gorm.DB) error
 // sameQuestionNode 检查两个题目节点是否相同
 func sameQuestionNode(a, b QuestionNode) bool {
 	return a.QuestionNumber == b.QuestionNumber &&
+		a.QuestionId == b.QuestionId &&
 		a.Title == b.Title &&
 		a.Difficulty == b.Difficulty &&
 		a.Tags == b.Tags &&

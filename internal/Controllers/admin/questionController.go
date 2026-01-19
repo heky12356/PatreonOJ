@@ -186,6 +186,24 @@ func (con QuestionController) Show(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": question})
 }
 
+// ShowByQuestionID 根据题目ID查询题目详情
+// GET /problem/show/by-id/{question_id}
+func (con QuestionController) ShowByQuestionID(c *gin.Context) {
+	questionID := c.Param("question_id")
+	if questionID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "缺少question_id"})
+		return
+	}
+
+	var question models.Question
+	if err := models.DB.Where("question_id = ?", questionID).First(&question).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "题目不存在"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"data": question})
+}
+
 func (con QuestionController) Update(c *gin.Context) {
 	// 1. 获取路径参数中的题目编号
 	numberStr := c.Param("number")

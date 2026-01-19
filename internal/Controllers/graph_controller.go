@@ -50,6 +50,7 @@ func (gc *GraphController) SyncQuestion(c *gin.Context) {
 	now := time.Now().UTC()
 	questionNode := graph.QuestionNode{
 		QuestionNumber: question.QuestionNumber,
+		QuestionId:     question.QuestionId,
 		Title:          question.Title,
 		Difficulty:     question.Difficulty,
 		Tags:           question.Tags,
@@ -296,18 +297,32 @@ func (gc *GraphController) ListQuestions(c *gin.Context) {
 		Weight float64 `json:"weight"`
 	}
 
+	questionIdByNumber := make(map[int]string, len(questions))
+	for _, q := range questions {
+		if q.QuestionNumber == 0 {
+			continue
+		}
+		questionIdByNumber[q.QuestionNumber] = q.QuestionId
+	}
+	questionKey := func(questionNumber int) string {
+		if qid := questionIdByNumber[questionNumber]; qid != "" {
+			return "Q:" + qid
+		}
+		return "Q:" + strconv.Itoa(questionNumber)
+	}
+
 	edges := make([]Edge, 0, len(questionRelations)+len(questionSkillRelations)+len(skillRelations))
 	for _, r := range questionRelations {
 		edges = append(edges, Edge{
-			From:   "Q:" + strconv.Itoa(r.FromQuestionNumber),
-			To:     "Q:" + strconv.Itoa(r.ToQuestionNumber),
+			From:   questionKey(r.FromQuestionNumber),
+			To:     questionKey(r.ToQuestionNumber),
 			Type:   string(r.RelationType),
 			Weight: r.Weight,
 		})
 	}
 	for _, r := range questionSkillRelations {
 		edges = append(edges, Edge{
-			From:   "Q:" + strconv.Itoa(r.QuestionNumber),
+			From:   questionKey(r.QuestionNumber),
 			To:     "S:" + r.SkillKey,
 			Type:   "HAS_SKILL",
 			Weight: r.Weight,

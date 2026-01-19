@@ -54,6 +54,7 @@ type UserQuestionMastery struct {
 	ID             uint   `gorm:"primaryKey;autoIncrement" json:"id"`
 	UserUUID       string `gorm:"size:36;not null;index:idx_user_question,unique" json:"user_uuid"`
 	QuestionNumber int    `gorm:"not null;index:idx_user_question,unique;index" json:"question_number"`
+	QuestionId     string `gorm:"size:36;index" json:"question_id"`
 
 	// 统计信息
 	Attempts      int     `gorm:"not null;default:0" json:"attempts"`       // 总提交次数

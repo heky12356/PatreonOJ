@@ -170,6 +170,7 @@ go build -o PatreonOJ.exe cmd/PatreonOJ/main.go
 - `GET /question/` - 获取题目列表（按题目编号排序）
   可以通过 q 参数来搜索，例如 /question?q=12
 - `GET /question/:number` - 通过题目编号获取单个题目详情
+- `GET /question/id/:question_id` - 通过题目ID（question_id）获取单个题目详情
 - `POST /question/` - 创建题目
 - `POST /question/:number` - 更新题目（使用题目编号）
 
@@ -742,7 +743,8 @@ curl -H "X-User-UUID: <你的UUID>" "http://localhost:8080/api/users/<你的UUID
          bucket/problems/1001/xxx.
          txt?Signature=...",
          "key": "problems/1001/xxx.
-         txt"
+         txt",
+        "bucket": "patreon-oj-cases"
      }
      ```
 2. 第二步：前端直传 MinIO
@@ -778,6 +780,30 @@ curl -H "X-User-UUID: <你的UUID>" "http://localhost:8080/api/users/<你的UUID
         ]
     }
     ```
+
+#### C. 前缀公开读（头像等静态资源）
+项目支持在服务启动时为同一个桶内的指定前缀自动配置“匿名公开读”（仅允许 `s3:GetObject` 访问该前缀下的对象），常用于头像等需要稳定 URL 的静态资源。
+
+**配置**
+在 `config.yaml` 增加 `oss.public_read_prefixes`：
+
+```yaml
+oss:
+  bucket_name: "patreon-oj-cases"
+  public_address: "localhost:9090"
+  public_read_prefixes: ["avatars/"]
+```
+
+**访问 URL 规则**
+公开读生效后，可直接通过以下格式访问对象：
+
+- `http(s)://{public_address}/{bucket_name}/{key}`
+- 示例：`http://localhost:9000/patreon-oj-cases/avatars/<user_uuid>/avatar.jpg`
+
+**注意事项**
+- 该功能需要配置的 `access_key/secret_key` 具备写桶策略（Bucket Policy）的权限。
+- 当前实现会直接设置桶策略；如果桶上已有自定义策略，需自行合并后再应用，避免被覆盖。
+- 建议仅对白名单前缀（如 `avatars/`）开放，不要整桶公开。
 
 如何使用（前端直传 OSS + commit）
 
