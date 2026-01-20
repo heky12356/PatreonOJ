@@ -34,6 +34,12 @@ judge:
   api_url: "http://your-judge-service-api"
   timeout: 15  # 超时时间（秒）
   queue_size: 100  # 队列大小
+
+  # Go-Judge 配置 (远程高效沙箱)
+  go_judge:
+    enabled: true
+    api_url: "http://localhost:5050/run"
+    token: "" 
   
   # 本地评测配置
   local:

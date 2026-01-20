@@ -73,11 +73,18 @@ type ServerConfig struct {
 
 // JudgeConfig 评测服务配置
 type JudgeConfig struct {
-	Mode      string           `mapstructure:"mode"`
-	APIURL    string           `mapstructure:"api_url"`
-	Timeout   int              `mapstructure:"timeout"`
-	QueueSize int              `mapstructure:"queue_size"`
-	Local     LocalJudgeConfig `mapstructure:"local"`
+	Mode      string            `mapstructure:"mode"`
+	APIURL    string            `mapstructure:"api_url"`
+	Timeout   int               `mapstructure:"timeout"`
+	QueueSize int               `mapstructure:"queue_size"`
+	Local     LocalJudgeConfig  `mapstructure:"local"`
+	GoJudge   GoJudgeConfig     `mapstructure:"go_judge"`
+}
+
+type GoJudgeConfig struct {
+	Enabled bool   `mapstructure:"enabled"`
+	APIURL  string `mapstructure:"api_url"`
+	Token   string `mapstructure:"token"`
 }
 
 // LocalJudgeConfig 本地评测配置

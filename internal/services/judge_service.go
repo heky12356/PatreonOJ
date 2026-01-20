@@ -26,6 +26,7 @@ type JudgeService struct {
 	DB                *gorm.DB            // 数据库连接
 	HTTPClient        *http.Client        // HTTP客户端
 	LocalJudgeService *LocalJudgeService  // 本地评测服务
+	GoJudgeClient     *GoJudgeClient      // Go-Judge 客户端
 	Config            *config.JudgeConfig // 评测配置
 	OSSClient         *oss.OSS
 	OSSBucket         string
@@ -40,11 +41,17 @@ func NewJudgeService(cfg *config.JudgeConfig, db *gorm.DB, ossClient *oss.OSS, o
 		localJudge = NewLocalJudgeService(&cfg.Local)
 	}
 
+	var goJudgeClient *GoJudgeClient
+	if cfg.GoJudge.Enabled {
+		goJudgeClient = NewGoJudgeClient(cfg.GoJudge.APIURL, cfg.Timeout)
+	}
+
 	return &JudgeService{
 		JudgeAPI:          cfg.APIURL,
 		DB:                db,
 		Config:            cfg,
 		LocalJudgeService: localJudge,
+		GoJudgeClient:     goJudgeClient,
 		OSSClient:         ossClient,
 		OSSBucket:         ossBucket,
 		HTTPClient: &http.Client{
@@ -210,35 +217,60 @@ func normalizeOutput(s string) string {
 }
 
 // executeRemoteJudgement 执行远程API评测
+// executeRemoteJudgement 执行远程API评测 (Go-Judge)
 func (js *JudgeService) executeRemoteJudgement(code string, testCases []models.TestCase) ([]models.TestCaseResult, error) {
-	var results []models.TestCaseResult
+	if js.GoJudgeClient == nil {
+		return nil, fmt.Errorf("go-judge client is not initialized")
+	}
 
+	// 1. 准备输入数据
+	inputs := make([]string, 0, len(testCases))
+	expectedList := make([]string, 0, len(testCases))
 	ctx := context.Background()
+	
 	for _, tc := range testCases {
 		input, expected, err := js.loadTestCaseIO(ctx, tc)
 		if err != nil {
 			return nil, err
 		}
+		inputs = append(inputs, input)
+		expectedList = append(expectedList, expected)
+	}
 
-		result := models.TestCaseResult{
-			Input:          input,
-			ExpectedOutput: expected,
-		}
-
-		startTime := time.Now()
-		actualOutput, err := js.callJudge(code, input)
-		runtime := time.Since(startTime).Milliseconds()
-
-		if err != nil {
-			result.ActualOutput = fmt.Sprintf("Error: %v", err)
-			result.IsCorrect = false
+	// 2. 检测语言
+	language := js.detectLanguage(code)
+	
+	// 3. 调用 Go-Judge (批量执行)
+	// 使用 Local 配置中的限制，或者新增 Remote 限制配置
+	// 这里暂时复用 Local 的限制配置作为默认值
+	memLimit := int64(js.Config.Local.MaxMemory)
+	if memLimit == 0 { memLimit = 256 }
+	timeLimit := int64(js.Config.Local.MaxTime)
+	if timeLimit == 0 { timeLimit = 5000 } // ms? No local config is seconds usually. Let's check.
+	// Config.Local.MaxTime is int (seconds). GoJudgeClient expects ms for time, MB for memory.
+	// GoJudgeClient signature: Run(code, language, inputs, timeLimitMs, memoryLimitMB)
+	
+	results, err := js.GoJudgeClient.Run(code, language, inputs, int64(js.Config.Local.MaxTime)*1000, int64(js.Config.Local.MaxMemory))
+	if err != nil {
+		return nil, fmt.Errorf("go-judge execution failed: %w", err)
+	}
+	
+	// 4. 比对结果
+	for i := range results {
+		// GoJudgeClient 已经填好了 Runtime, Memory, ActualOutput (maybe error message)
+		// 我们需要比对 ExpectedOutput
+		if results[i].ActualOutput == "Time Limit Exceeded" || 
+		   results[i].ActualOutput == "Memory Limit Exceeded" ||
+		   strings.HasPrefix(results[i].ActualOutput, "Runtime Error") ||
+		   strings.HasPrefix(results[i].ActualOutput, "Compile Error") ||
+		   strings.HasPrefix(results[i].ActualOutput, "Error") {
+			results[i].IsCorrect = false
 		} else {
-			result.ActualOutput = actualOutput
-			result.IsCorrect = strings.TrimSpace(actualOutput) == expected
+			results[i].ExpectedOutput = normalizeOutput(expectedList[i])
+			results[i].ActualOutput = strings.TrimSpace(results[i].ActualOutput)
+			// 标准化 Output
+			results[i].IsCorrect = strings.TrimSpace(normalizeOutput(results[i].ActualOutput)) == results[i].ExpectedOutput
 		}
-		result.Runtime = runtime
-
-		results = append(results, result)
 	}
 
 	return results, nil
