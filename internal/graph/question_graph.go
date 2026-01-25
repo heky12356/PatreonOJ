@@ -83,6 +83,75 @@ func (s *QuestionGraphService) ListQuestions(ctx context.Context) ([]QuestionNod
 	return result.([]QuestionNode), nil
 }
 
+// UserMasteryInfo 用户掌握度信息
+type UserMasteryInfo struct {
+	SkillKey string  `json:"skill_key"`
+	Mastery  float64 `json:"mastery"`
+}
+
+// UpdateUserMastery 更新用户对特定技能的掌握度
+func (s *QuestionGraphService) UpdateUserMastery(ctx context.Context, userID string, skillKey string, mastery float64) error {
+	query := `
+		MERGE (u:User {user_id: $user_id})
+		MERGE (s:Skill {key: $skill_key})
+		MERGE (u)-[r:MASTERED]->(s)
+		SET r.mastery = $mastery,
+			r.updated_at = datetime()
+	`
+
+	params := map[string]interface{}{
+		"user_id":   userID,
+		"skill_key": skillKey,
+		"mastery":   mastery,
+	}
+
+	_, err := s.client.ExecuteWrite(ctx, func(tx neo4j.ManagedTransaction) (interface{}, error) {
+		_, err := tx.Run(ctx, query, params)
+		return nil, err
+	})
+
+	return err
+}
+
+// GetUserMastery 获取用户所有技能的掌握度
+func (s *QuestionGraphService) GetUserMastery(ctx context.Context, userID string) ([]UserMasteryInfo, error) {
+	query := `
+		MATCH (u:User {user_id: $user_id})-[r:MASTERED]->(s:Skill)
+		RETURN s.key as skill_key, r.mastery as mastery
+	`
+
+	params := map[string]interface{}{
+		"user_id": userID,
+	}
+
+	result, err := s.client.ExecuteRead(ctx, func(tx neo4j.ManagedTransaction) (interface{}, error) {
+		result, err := tx.Run(ctx, query, params)
+		if err != nil {
+			return nil, err
+		}
+
+		var masteries []UserMasteryInfo
+		for result.Next(ctx) {
+			record := result.Record()
+
+			var mastery float64
+			if val, ok := record.Values[1].(float64); ok {
+				mastery = val
+			}
+
+			masteries = append(masteries, UserMasteryInfo{
+				SkillKey: record.Values[0].(string),
+				Mastery:  mastery,
+			})
+		}
+		return masteries, result.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result.([]UserMasteryInfo), nil
+}
+
 // QuestionSkillRelation 题目-技能关系结构
 type QuestionSkillRelation struct {
 	QuestionNumber int     `json:"question_number"`
@@ -386,6 +455,30 @@ func (s *QuestionGraphService) CreateRelation(ctx context.Context, relation Ques
 		"weight":               relation.Weight,
 		"description":          relation.Description,
 		"created_at":           relation.CreatedAt,
+	}
+
+	_, err := s.client.ExecuteWrite(ctx, func(tx neo4j.ManagedTransaction) (interface{}, error) {
+		_, err := tx.Run(ctx, query, params)
+		return nil, err
+	})
+
+	return err
+}
+
+// CreateSkillRelation 创建技能间的关系
+func (s *QuestionGraphService) CreateSkillRelation(ctx context.Context, fromKey, toKey string, relationType SkillRelationType, description string) error {
+	query := fmt.Sprintf(`
+		MATCH (from:Skill {key: $from_key})
+		MATCH (to:Skill {key: $to_key})
+		MERGE (from)-[r:%s]->(to)
+		SET r.description = $description,
+			r.created_at = datetime()
+	`, relationType)
+
+	params := map[string]interface{}{
+		"from_key":    fromKey,
+		"to_key":      toKey,
+		"description": description,
 	}
 
 	_, err := s.client.ExecuteWrite(ctx, func(tx neo4j.ManagedTransaction) (interface{}, error) {
@@ -842,15 +935,6 @@ type SkillNode struct {
 	UpdatedAt time.Time
 }
 
-// SkillRelationType 技能/标签关系类型
-type SkillRelationType string
-
-const (
-	SkillRelCoOccur  SkillRelationType = "SKILL_CO_OCCUR" // 同题共现（权重=共现次数）
-	SkillRelSubsumes SkillRelationType = "SKILL_SUBSUMES" // 基于名称包含的泛化/细化关系（权重固定）
-	QuestionHasSkill SkillRelationType = "HAS_SKILL"      // 题目-技能关系（权重=1）
-)
-
 // skillRel 技能/标签关系
 type skillRel struct {
 	FromKey string
@@ -1174,9 +1258,9 @@ func (s *QuestionGraphService) SyncSkills(ctx context.Context, questions []model
 	for _, r := range rels {
 		payload := map[string]interface{}{"from": r.FromKey, "to": r.ToKey, "weight": r.Weight}
 		switch r.Type {
-		case SkillRelCoOccur:
+		case SKILL_CO_OCCUR:
 			coOccurBatch = append(coOccurBatch, payload)
-		case SkillRelSubsumes:
+		case SKILL_SUBSUMES:
 			subsumesBatch = append(subsumesBatch, payload)
 		}
 	}
@@ -1186,7 +1270,7 @@ func (s *QuestionGraphService) SyncSkills(ctx context.Context, questions []model
 		if end > len(coOccurBatch) {
 			end = len(coOccurBatch)
 		}
-		if err := batchUpsertSkillRels(coOccurBatch[i:end], SkillRelCoOccur); err != nil {
+		if err := batchUpsertSkillRels(coOccurBatch[i:end], SKILL_CO_OCCUR); err != nil {
 			return err
 		}
 	}
@@ -1195,7 +1279,7 @@ func (s *QuestionGraphService) SyncSkills(ctx context.Context, questions []model
 		if end > len(subsumesBatch) {
 			end = len(subsumesBatch)
 		}
-		if err := batchUpsertSkillRels(subsumesBatch[i:end], SkillRelSubsumes); err != nil {
+		if err := batchUpsertSkillRels(subsumesBatch[i:end], SKILL_SUBSUMES); err != nil {
 			return err
 		}
 	}
@@ -1235,6 +1319,99 @@ func normalizeSkillKey(name string) string {
 	return strings.ToLower(name)
 }
 
+// RecommendQuestionsBySkills 基于技能列表推荐题目
+func (s *QuestionGraphService) RecommendQuestionsBySkills(ctx context.Context, userID string, targetSkills []string, limit int) ([]RecommendationResult, error) {
+	// 如果没有目标技能（可能是全都会了，或者全是新的），这里简单策略是推荐“进阶”题或者“最热门但未做”的题
+	// 现阶段简单处理：如果没有targetSkills，查找所有未做的简单题
+
+	query := ""
+	params := map[string]interface{}{
+		"user_id": userID,
+		"limit":   limit,
+	}
+
+	if len(targetSkills) > 0 {
+		params["skills"] = targetSkills
+		query = `
+			MATCH (u:User {user_id: $user_id})
+			MATCH (s:Skill)<-[:HAS_SKILL]-(q:Question)
+			WHERE s.key IN $skills
+			  AND q.status = 'published'
+			  AND NOT (u)-[:SOLVED]->(q)  // 排除已做过的 (需确保有 SOLVED 关系，或者忽略)
+			WITH q, s, rand() as random
+			ORDER BY random
+			RETURN q.question_number as question_number,
+				   coalesce(q.question_id, '') as question_id,
+				   q.title as title,
+				   q.difficulty as difficulty,
+				   1.0 as score, 
+				   'SKILL_TARGET' as relation_type,
+				   '强化技能: ' + s.name as reason,
+				   s.key as skill_key
+			LIMIT $limit
+		`
+	} else {
+		// 备选策略：推荐任意未做的简单/中等题
+		query = `
+			MATCH (q:Question)
+			WHERE q.status = 'published'
+			  AND q.difficulty IN ['Simple', 'Easy', 'Medium', '简单', '中等']
+			WITH q, rand() as random
+			ORDER BY random
+			RETURN q.question_number as question_number,
+				   coalesce(q.question_id, '') as question_id,
+				   q.title as title,
+				   q.difficulty as difficulty,
+				   0.5 as score,
+				   'GENERAL' as relation_type,
+				   '每日推荐' as reason,
+				   '' as skill_key
+			LIMIT $limit
+		`
+	}
+
+	result, err := s.client.ExecuteRead(ctx, func(tx neo4j.ManagedTransaction) (interface{}, error) {
+		result, err := tx.Run(ctx, query, params)
+		if err != nil {
+			return nil, err
+		}
+
+		var recommendations []RecommendationResult
+		for result.Next(ctx) {
+			record := result.Record()
+
+			var score float64
+			if val, ok := record.Values[4].(float64); ok {
+				score = val
+			}
+
+			skillKey := ""
+			if len(record.Values) > 7 {
+				if val, ok := record.Values[7].(string); ok {
+					skillKey = val
+				}
+			}
+
+			rec := RecommendationResult{
+				QuestionNumber: int(record.Values[0].(int64)),
+				QuestionId:     record.Values[1].(string),
+				Title:          record.Values[2].(string),
+				Difficulty:     record.Values[3].(string),
+				Score:          score,
+				RelationType:   RelationshipType(record.Values[5].(string)),
+				Reason:         record.Values[6].(string),
+				SkillKey:       skillKey, // Added field
+			}
+			recommendations = append(recommendations, rec)
+		}
+		return recommendations, result.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result.([]RecommendationResult), nil
+}
+
 // displayNameFromKey 从技能键中提取显示名称（去空格）
 func displayNameFromKey(key string) string {
 	return strings.TrimSpace(key)
@@ -1267,7 +1444,7 @@ func buildAutoSkillRelations(questions []models.Question) []skillRel {
 		if len(parts) != 2 {
 			continue
 		}
-		rels = append(rels, skillRel{FromKey: parts[0], ToKey: parts[1], Type: SkillRelCoOccur, Weight: float64(cnt)})
+		rels = append(rels, skillRel{FromKey: parts[0], ToKey: parts[1], Type: SKILL_CO_OCCUR, Weight: float64(cnt)})
 	}
 
 	// SUBSUMES 关系（泛化->细化）
@@ -1294,7 +1471,7 @@ func buildAutoSkillRelations(questions []models.Question) []skillRel {
 					continue
 				}
 				added[key] = struct{}{}
-				rels = append(rels, skillRel{FromKey: general, ToKey: specific, Type: SkillRelSubsumes, Weight: 0.6})
+				rels = append(rels, skillRel{FromKey: general, ToKey: specific, Type: SKILL_SUBSUMES, Weight: 0.6})
 			}
 		}
 	}

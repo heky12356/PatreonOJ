@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"dachuang/internal/config"
+	"dachuang/internal/graph"
 	"dachuang/internal/models"
 	"dachuang/internal/oss"
 
@@ -30,10 +31,16 @@ type JudgeService struct {
 	Config            *config.JudgeConfig // 评测配置
 	OSSClient         *oss.OSS
 	OSSBucket         string
+
+	// 图相关的服务和评估服务
+	GraphService      *graph.QuestionGraphService
+	AssessmentService *AssessmentService
 }
 
 // NewJudgeService 创建评测服务实例
-func NewJudgeService(cfg *config.JudgeConfig, db *gorm.DB, ossClient *oss.OSS, ossBucket string) *JudgeService {
+func NewJudgeService(cfg *config.JudgeConfig, db *gorm.DB, ossClient *oss.OSS, ossBucket string,
+	graphService *graph.QuestionGraphService, assessmentService *AssessmentService,
+) *JudgeService {
 	timeout := time.Duration(cfg.Timeout) * time.Second
 
 	var localJudge *LocalJudgeService
@@ -54,6 +61,8 @@ func NewJudgeService(cfg *config.JudgeConfig, db *gorm.DB, ossClient *oss.OSS, o
 		GoJudgeClient:     goJudgeClient,
 		OSSClient:         ossClient,
 		OSSBucket:         ossBucket,
+		GraphService:      graphService,
+		AssessmentService: assessmentService,
 		HTTPClient: &http.Client{
 			Timeout: timeout,
 		},
@@ -116,6 +125,21 @@ func (js *JudgeService) JudgeCode(submission *models.Submission) error {
 	submission.Status = "completed"
 	if err := js.DB.Save(submission).Error; err != nil {
 		return fmt.Errorf("保存评测结果失败: %w", err)
+	}
+
+	// 6. 如果评测通过，触发能力评估更新
+	isAc := true
+	for _, r := range results {
+		if !r.IsCorrect {
+			isAc = false
+			break
+		}
+	}
+
+	if isAc {
+		if err := js.AssessmentService.UpdateUserMasteryBasedOnResult(submission.UserID, submission.QuestionID, true); err != nil {
+			log.Printf("更新用户的掌握度失败: %v", err)
+		}
 	}
 
 	return nil
@@ -216,7 +240,6 @@ func normalizeOutput(s string) string {
 	return strings.Join(lines, "\n")
 }
 
-// executeRemoteJudgement 执行远程API评测
 // executeRemoteJudgement 执行远程API评测 (Go-Judge)
 func (js *JudgeService) executeRemoteJudgement(code string, testCases []models.TestCase) ([]models.TestCaseResult, error) {
 	if js.GoJudgeClient == nil {
@@ -227,7 +250,7 @@ func (js *JudgeService) executeRemoteJudgement(code string, testCases []models.T
 	inputs := make([]string, 0, len(testCases))
 	expectedList := make([]string, 0, len(testCases))
 	ctx := context.Background()
-	
+
 	for _, tc := range testCases {
 		input, expected, err := js.loadTestCaseIO(ctx, tc)
 		if err != nil {
@@ -239,31 +262,31 @@ func (js *JudgeService) executeRemoteJudgement(code string, testCases []models.T
 
 	// 2. 检测语言
 	language := js.detectLanguage(code)
-	
+
 	// 3. 调用 Go-Judge (批量执行)
-	// 使用 Local 配置中的限制，或者新增 Remote 限制配置
-	// 这里暂时复用 Local 的限制配置作为默认值
-	memLimit := int64(js.Config.Local.MaxMemory)
-	if memLimit == 0 { memLimit = 256 }
-	timeLimit := int64(js.Config.Local.MaxTime)
-	if timeLimit == 0 { timeLimit = 5000 } // ms? No local config is seconds usually. Let's check.
-	// Config.Local.MaxTime is int (seconds). GoJudgeClient expects ms for time, MB for memory.
-	// GoJudgeClient signature: Run(code, language, inputs, timeLimitMs, memoryLimitMB)
-	
-	results, err := js.GoJudgeClient.Run(code, language, inputs, int64(js.Config.Local.MaxTime)*1000, int64(js.Config.Local.MaxMemory))
+	memLimit := int64(js.Config.GoJudge.MaxMemory)
+	if memLimit == 0 {
+		memLimit = 256
+	}
+	timeLimit := int64(js.Config.GoJudge.MaxTime)
+	if timeLimit == 0 {
+		timeLimit = 5000
+	}
+
+	results, err := js.GoJudgeClient.Run(code, language, inputs, timeLimit, memLimit)
 	if err != nil {
 		return nil, fmt.Errorf("go-judge execution failed: %w", err)
 	}
-	
+
 	// 4. 比对结果
 	for i := range results {
 		// GoJudgeClient 已经填好了 Runtime, Memory, ActualOutput (maybe error message)
 		// 我们需要比对 ExpectedOutput
-		if results[i].ActualOutput == "Time Limit Exceeded" || 
-		   results[i].ActualOutput == "Memory Limit Exceeded" ||
-		   strings.HasPrefix(results[i].ActualOutput, "Runtime Error") ||
-		   strings.HasPrefix(results[i].ActualOutput, "Compile Error") ||
-		   strings.HasPrefix(results[i].ActualOutput, "Error") {
+		if results[i].ActualOutput == "Time Limit Exceeded" ||
+			results[i].ActualOutput == "Memory Limit Exceeded" ||
+			strings.HasPrefix(results[i].ActualOutput, "Runtime Error") ||
+			strings.HasPrefix(results[i].ActualOutput, "Compile Error") ||
+			strings.HasPrefix(results[i].ActualOutput, "Error") {
 			results[i].IsCorrect = false
 		} else {
 			results[i].ExpectedOutput = normalizeOutput(expectedList[i])
