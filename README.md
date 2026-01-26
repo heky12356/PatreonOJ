@@ -1,18 +1,121 @@
-# PatreonOJ - 在线判题系统
+# PatreonOJ - 智能在线判题系统
 
-## 快速开始
+<p align="center">
+  <strong>一个功能完善的在线编程评测系统，集成知识图谱与智能推荐</strong>
+</p>
 
-### 1. 安装依赖
+<p align="center">
+  <img src="https://img.shields.io/badge/Go-1.22+-00ADD8?style=flat&logo=go" alt="Go Version">
+  <img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License">
+  <img src="https://img.shields.io/badge/Database-MySQL%20%7C%20SQLite-orange" alt="Database">
+  <img src="https://img.shields.io/badge/Graph-Neo4j-008CC1?logo=neo4j" alt="Neo4j">
+</p>
+
+---
+
+## 📖 目录
+
+- [✨ 特性](#-特性)
+- [🛠️ 技术栈](#️-技术栈)
+- [📦 项目结构](#-项目结构)
+- [🚀 快速开始](#-快速开始)
+- [⚙️ 配置说明](#️-配置说明)
+- [📚 API 文档](#-api-文档)
+
+---
+
+## ✨ 特性
+
+| 模块 | 功能描述 |
+|------|---------|
+| **🧑‍💻 用户系统** | 注册登录、权限管理、个人信息、学习进度追踪 |
+| **📝 题目管理** | 题目 CRUD、分类标签、难度分级、搜索筛选 |
+| **⚡ 代码评测** | 支持 Go/C++/Python/Java，Docker 沙箱隔离，资源限制 |
+| **🧪 测试用例** | 批量导入、OSS 存储、隐藏/公开测试用例 |
+| **📊 知识图谱** | Neo4j 存储题目关系、前置知识、学习路径推荐 |
+| **📈 智能推荐** | 结合用户能力模型与知识图谱，分析知识盲区，提供靶向强化题目 |
+| **🧠 能力评估** | 基于做题记录自动计算技能掌握度，支持雷达图展示（六边形战士） |
+| **☁️ OSS 存储** | MinIO 对象存储，支持前端直传、预签名 URL |
+
+---
+
+## 🛠️ 技术栈
+
+```
+后端框架   │ Gin (Go Web Framework)
+ORM       │ GORM
+关系数据库 │ MySQL / SQLite
+图数据库   │ Neo4j
+对象存储   │ MinIO
+配置管理   │ Viper
+容器化评测 │ Docker
+```
+
+---
+
+## 📦 项目结构
+
+```
+PatreonOJ/
+├── cmd/PatreonOJ/              # 程序入口
+│   └── main.go
+├── internal/                   # 内部模块
+│   ├── Controllers/            # 控制器层
+│   │   ├── admin/              #   └─ CRUD 控制器
+│   │   ├── graph_controller.go #   └─ 知识图谱 API
+│   │   └── osscontroller.go    #   └─ OSS 接口
+│   ├── models/                 # 数据模型层
+│   │   ├── core.go             #   └─ DB 初始化 & 迁移
+│   │   ├── user.go             #   └─ 用户模型
+│   │   ├── question.go         #   └─ 题目模型
+│   │   └── submission.go       #   └─ 提交记录模型
+│   ├── graph/                  # Neo4j 图数据库
+│   │   ├── neo4j.go            #   └─ 连接管理
+│   │   └── question_graph.go   #   └─ 图操作逻辑
+│   ├── services/               # 业务逻辑层
+│   │   ├── judge_service.go    #   └─ 评测调度
+│   │   ├── local_judge.go      #   └─ 本地评测实现
+│   │   ├── ai_service.go       #   └─ AI 服务 (LLM集成)
+│   │   ├── assessment_service.go # └─ 能力评估服务
+│   │   └── recommendation_service.go # └─ 推荐服务
+│   ├── routers/                # 路由配置
+│   ├── oss/                    # OSS 客户端
+│   ├── config/                 # 配置结构
+│   └── util/                   # 工具函数
+├── sandbox/                    # 沙箱目录（评测）
+├── data/                       # 数据目录（SQLite）
+├── config.yaml                 # 配置文件
+└── go.mod / go.sum             # Go 模块依赖
+```
+
+---
+
+## 🚀 快速开始
+
+### 1️⃣ 安装依赖
 
 ```bash
 go mod tidy
 ```
 
-### 2. 配置数据库
+### 2️⃣ 配置数据库
 
-编辑 `config.yaml` 文件：
+编辑 `config.yaml`：
 
-#### 使用 MySQL
+<details>
+<summary><b>SQLite（推荐开发环境）</b></summary>
+
+```yaml
+database:
+  type: "sqlite"
+  sqlite:
+    path: "./data/patreon.db"
+```
+</details>
+
+<details>
+<summary><b>MySQL（生产环境）</b></summary>
+
 ```yaml
 database:
   type: "mysql"
@@ -23,94 +126,145 @@ database:
     password: "your_password"
     dbname: "patreon_oj"
     charset: "utf8mb4"
-    parseTime: true
-    loc: "Local"
 ```
+</details>
 
-#### 使用 SQLite
-```yaml
-database:
-  type: "sqlite"
-  sqlite:
-    path: "./data/patreon.db"
-```
-
-### 3. 配置评测系统
-
-#### 本地评测模式
-```yaml
-judge:
-  mode: "local"  # 使用本地评测
-  local:
-    enabled: true
-    sandbox_dir: "./sandbox"  # 沙箱目录
-    max_memory: 128  # 最大内存限制(MB)
-    max_time: 5  # 最大执行时间(秒)
-    max_output_size: 1024  # 最大输出大小(KB)
-    supported_languages:
-      - "go"
-      - "python"
-      - "cpp"
-      - "java"
-```
-
-#### 远程评测模式
-暂不支持
-
-### 4. 启动服务
+### 3️⃣ 启动服务
 
 ```bash
+# 开发模式
 go run cmd/PatreonOJ/main.go
-```
 
-或者编译后运行：
-
-```bash
+# 或编译后运行
 go build -o PatreonOJ.exe cmd/PatreonOJ/main.go
 ./PatreonOJ.exe
 ```
 
-服务器将在配置的端口启动（默认 8080）。
+服务默认运行在 `http://localhost:8080`
 
-## 配置说明
+---
 
-### 数据库配置
-- `database.type`: 数据库类型，支持 "mysql" 或 "sqlite"
-- `database.mysql.*`: MySQL 相关配置
-- `database.sqlite.path`: SQLite 数据库文件路径
+## ⚙️ 配置说明
 
-### 服务器配置
-- `server.port`: 服务器端口（默认 8080）
-- `server.mode`: Gin 运行模式（debug/release/test）
+### 评测系统配置
 
-### 评测服务配置
-- `judge.mode`: 评测模式，支持 "local"（本地评测）或 "remote"（远程API评测）
-- `judge.api_url`: 远程评测服务 API 地址（仅远程模式需要）
-- `judge.timeout`: 评测超时时间（秒）
-- `judge.queue_size`: 评测队列大小
+```yaml
+### 评测系统配置
 
-#### 本地评测配置
-- `judge.local.enabled`: 是否启用本地评测
-- `judge.local.sandbox_dir`: 沙箱目录路径
-- `judge.local.max_memory`: 最大内存限制（MB）
-- `judge.local.max_time`: 最大执行时间（秒）
-- `judge.local.max_output_size`: 最大输出大小（KB）
-- `judge.local.supported_languages`: 支持的编程语言列表
+```yaml
+judge:
+  mode: "local"                     # local (本地Docker) / remote (外部API)
+  timeout: 15                       # 评测超时时间(秒)
+  queue_size: 100                   # 评测队列深度
+
+  # Go-Judge 高效沙箱 (推荐)
+  go_judge:
+    enabled: true
+    api_url: "http://localhost:5050/run"
+    token: ""
+
+  # 本地 Docker 评测 (备用)
+  local:
+    enabled: true
+    executor: docker
+    sandbox_dir: ./sandbox
+    max_memory: 256                 # MB
+    max_time: 5000                  # ms
+    max_output_size: 1024           # KB
+    docker_image_go: golang:1.22-bookworm
+    docker_image_cpp: gcc:13-bookworm
+    docker_image_python: python:3.12-bookworm
+    docker_image_java: eclipse-temurin:21-jdk
+```
+
+### Neo4j 图数据库（可选）
+
+```yaml
+graph_database:
+  neo4j:
+    uri: "bolt://localhost:7687"
+    username: "neo4j"
+    password: "password"
+    database: "neo4j"
+```
 
 ### 日志配置
-暂不支持
 
-## API 接口
+```yaml
+log:
+  level: "info"       # debug, info, warn, error
+  format: "json"      # json, text
+  output: "stdout"    # stdout, file
+  file_path: "./logs/app.log"
+```
 
-### 用户管理
-- `GET /user/` - 获取用户列表
-- `POST /user/register` - 用户注册
-- `POST /user/login` - 用户登录
-- `POST /user/logout` - 用户注销
+### MinIO OSS 存储
 
-#### POST 接口 JSON 格式
+```yaml
+oss:
+  address: "localhost:9090"
+  public_address: "localhost:9090"
+  access_key: "your_access_key"
+  secret_key: "your_secret_key"
+  bucket_name: "patreon-oj-cases"
+  public_read_prefixes: ["avatars/"]
+```
 
-**用户注册** `POST /user/register`
+### AI 服务配置（可选）
+
+支持 OpenAI 及兼容 API（如 Ollama 本地部署）：
+
+<details>
+<summary><b>Ollama 本地部署（推荐）</b></summary>
+
+```yaml
+ai:
+  enabled: true
+  base_url: "http://localhost:11434/v1"
+  api_key: ""  # Ollama 不需要 API Key
+  model: "deepseek-r1:8b"  # 或 qwen2.5:7b, llama3:8b
+  temperature: 0.7
+```
+</details>
+
+<details>
+<summary><b>OpenAI / 云端 API</b></summary>
+
+```yaml
+ai:
+  enabled: true
+  base_url: "https://api.openai.com/v1"
+  api_key: "sk-your-api-key"
+  model: "gpt-3.5-turbo"
+  temperature: 0.7
+```
+</details>
+
+---
+
+## 📚 API 文档
+
+### 用户管理 `/user`
+
+| 方法 | 路径 | 描述 |
+|-----|------|------|
+| GET | `/user/` | 获取用户列表 |
+| POST | `/user/register` | 用户注册 |
+| POST | `/user/login` | 用户登录 |
+| POST | `/user/logout` | 用户注销 |
+| GET | `/user/:uuid` | 获取用户信息 |
+| PUT | `/user/:uuid` | 更新用户信息 |
+| GET | `/user/solves/:uuid` | 获取用户解题ID列表 |
+| GET | `/user/solve/` | 查询某题是否已解决 (`?question_number=`) |
+| GET | `/user/:uuid/mastery/questions` | 查询题目掌握度 |
+| GET | `/user/:uuid/mastery/tags` | 查询标签掌握度 |
+| POST | `/user/:uuid/mastery/events` | 提交学习事件 |
+| GET | `/api/v1/user/stats/radar` | 获取用户能力雷达图数据 |
+
+<details>
+<summary><b>请求/响应示例</b></summary>
+
+**注册** `POST /user/register`
 ```json
 {
     "username": "用户名",
@@ -118,7 +272,7 @@ go build -o PatreonOJ.exe cmd/PatreonOJ/main.go
 }
 ```
 
-**用户登录** `POST /user/login`
+**登录** `POST /user/login`
 ```json
 {
     "username": "用户名",
@@ -126,203 +280,150 @@ go build -o PatreonOJ.exe cmd/PatreonOJ/main.go
 }
 ```
 
-**用户注销** `POST /user/logout`
+**能力雷达图** `GET /api/v1/user/stats/radar`
 ```json
 {
-    "user_id": 1
+  "code": 200,
+  "data": [
+    { "subject": "Array", "A": 85, "fullMark": 100 },
+    { "subject": "DP", "A": 60, "fullMark": 100 },
+    { "subject": "Greedy", "A": 40, "fullMark": 100 }
+  ]
 }
 ```
 
-### 用户态数据
-- `GET /user/:uuid?operator_uuid=...` - 获取用户信息
-- `PUT /user/:uuid?operator_uuid=...` - 更新用户信息
-- `GET /user/:uuid/mastery/questions?operator_uuid=...` - 查询题目掌握度（分页/筛选/排序）
-- `GET /user/:uuid/mastery/tags?operator_uuid=...` - 查询标签掌握度（分页/筛选/排序）
-- `POST /user/:uuid/mastery/events?operator_uuid=...` - 提交学习事件（写入掌握度）
-- `DELETE /user/:uuid/mastery/questions/:number?operator_uuid=...` - 重置某题掌握度
-- `DELETE /user/:uuid/mastery/tags?tag=xxx&operator_uuid=...` - 重置某标签掌握度
-
-**更新用户信息** `PUT /user/:uuid?operator_uuid=...`
+**技能掌握度** `GET /user/:uuid/mastery/tags`
 ```json
 {
-  "nickname": "新昵称",
-  "email": "a@b.com",
-  "avatar_url": "https://..."
+  "code": 200,
+  "data": [
+    { "skill_key": "array", "mastery": 0.85 },
+    { "skill_key": "dynamic_programming", "mastery": 0.60 }
+  ]
 }
 ```
 
-**查询题目掌握度** `GET /user/:uuid/mastery/questions?operator_uuid=...&pageIdx=1&pageSize=20&min_mastery=0.5&sort=mastery&order=desc`
-
-**提交学习事件** `POST /user/:uuid/mastery/events?operator_uuid=...`
+**题目掌握情况** `GET /user/:uuid/mastery/questions`
 ```json
 {
-  "question_number": 1001,
-  "accepted": true
+  "code": 200,
+  "data": [
+    { "question_number": 1001, "mastery": 1.0, "last_updated": "2024-03-20T10:00:00Z" },
+    { "question_number": 1005, "mastery": 0.5, "last_updated": "2024-03-21T15:30:00Z" }
+  ]
 }
 ```
+</details>
 
-**常见错误**
-- `403`: 无权限（operator_uuid 不是本人且无 admin 权限）
-- `404`: 用户不存在 / 题目不存在
-- `400`: 参数错误（例如 status 非 active/disabled）
+---
 
-### 题目管理
-- `GET /question/` - 获取题目列表（按题目编号排序）
-  可以通过 q 参数来搜索，例如 /question?q=12
-- `GET /question/:number` - 通过题目编号获取单个题目详情
-- `GET /question/id/:question_id` - 通过题目ID（question_id）获取单个题目详情
-- `POST /question/` - 创建题目
-- `POST /question/:number` - 更新题目（使用题目编号）
+### 题目管理 `/question`
 
-#### POST 接口 JSON 格式
+| 方法 | 路径 | 描述 |
+|-----|------|------|
+| GET | `/question/` | 获取题目列表（支持 `?q=` 搜索） |
+| GET | `/question/:number` | 按题号获取题目 |
+| GET | `/question/new` | 获取最新题目 |
+| POST | `/question/` | 创建题目 |
+| POST | `/question/:number` | 更新题目 |
+
+<details>
+<summary><b>请求/响应示例</b></summary>
 
 **创建题目** `POST /question/`
-
-完整版示例（包含所有可选字段）：
 ```json
 {
     "question_id": "p1001",
     "title": "两数之和",
-    "content": "给定一个整数数组 nums 和一个整数目标值 target，请你在该数组中找出和为目标值 target 的那两个整数，并返回它们的数组下标。",
+    "content": "题目描述...",
     "difficulty": "简单",
     "time_limit": 1000,
     "memory_limit": 128,
     "tags": "数组,哈希表",
-    "category_id": 1,
     "status": "published"
 }
 ```
+</details>
 
-最简版示例（仅必填字段）：
+---
+
+### 代码评测 `/submission`
+
+| 方法 | 路径 | 描述 |
+|-----|------|------|
+| POST | `/submission/` | 提交代码 |
+| GET | `/submission/:id` | 获取评测结果 |
+| GET | `/api/problems/:number/submissions` | 题目提交记录（公开） |
+| GET | `/api/users/:user_id/submissions` | 个人提交记录 |
+
+<details>
+<summary><b>请求/响应示例</b></summary>
+
+**提交代码** `POST /submission/`
 ```json
 {
-    "title": "两数之和",
-    "content": "给定一个整数数组 nums 和一个整数目标值 target，请你在该数组中找出和为目标值 target 的那两个整数，并返回它们的数组下标。",
-    "difficulty": "简单"
+    "user_id": "用户UUID",
+    "question_number": 1001,
+    "code": "package main...",
+    "language": "go"
 }
 ```
 
-**字段说明：**
-- `question_id`: 题目ID（必填）
-- `title`: 题目标题（必填）
-- `content`: 题目描述（必填）
-- `difficulty`: 难度等级（必填）
-- `time_limit`: 时间限制，单位毫秒（可选，默认1000）
-- `memory_limit`: 内存限制，单位MB（可选，默认128）
-- `tags`: 题目标签，逗号分隔（可选）
-- `status`: 题目状态（可选，默认"published"，可选值：published/hint）
-- `category_id`: 分类ID（可选）
+**支持语言**: `go`, `cpp`, `python`, `java`
 
-**更新题目** `POST /question/:number`
-```json
-{
-    "title": "更新后的题目标题",
-    "content": "更新后的题目内容",
-    "difficulty": "更新后的难度",
-    "input_format": "更新后的输入格式",
-    "output_format": "更新后的输出格式",
-    "time_limit": 3000,
-    "memory_limit": 512,
-    "status": "published",
-    "category_id": 2
-}
-```
+**评测状态**:
+- `pending` - 等待评测
+- `judging` - 评测中
+- `accepted` - 通过
+- `wrong_answer` - 答案错误
+- `time_limit_exceeded` - 超时
+- `memory_limit_exceeded` - 内存超限
+- `runtime_error` - 运行时错误
+- `compile_error` - 编译错误
+</details>
 
-**获取最近题目** `GET /question/new`
+---
 
-### 分类管理
-- `GET /category/` - 获取分类列表
-- `POST /category/` - 创建分类
-- `POST /category/:id` - 更新分类
+### 测试用例 `/testcase`
 
-#### POST 接口 JSON 格式
+| 方法 | 路径 | 描述 |
+|-----|------|------|
+| GET | `/testcase/` | 获取测试用例列表 |
+| GET | `/testcase/question/:number` | 按题号获取测试用例 |
+| POST | `/testcase/` | 添加单个测试用例 |
+| POST | `/testcase/batch` | 批量添加测试用例 |
+| POST | `/testcase/oss/commit` | OSS 上传后落库 |
+| PUT | `/testcase/:id` | 更新测试用例 |
+| DELETE | `/testcase/:id` | 删除测试用例 |
 
-**创建分类** `POST /category/`
-```json
-{
-    "name": "分类名称",
-    "slug": "分类标识",
-    "parent_id": "父分类ID",
-    "description": "分类描述"
-}
-```
+---
 
-**更新分类** `POST /category/:id`
-```json
-{
-    "name": "更新后的分类名称",
-    "slug": "更新后的分类标识",
-    "parent_id": "更新后的父分类ID",
-    "description": "更新后的分类描述"
-}
-```
+### 知识图谱 `/graph`
 
-**删除分类** `DELETE /category/delete`
-```json
-{
-    "id": 1,
-    "uuid": "xxx" // 账号uuid
-}
-```
+> ⚠️ 以下接口需要 Neo4j 连接成功才可用
 
-### 关系管理
-- `GET /relation/` - 获取关系列表
+| 方法 | 路径 | 描述 |
+|-----|------|------|
+| GET | `/graph/node` | 获取全部节点和边（用于前端可视化） |
+| POST | `/graph/questions/:number/sync` | 同步题目到 Neo4j |
+| POST | `/graph/relations` | 创建题目关系边 |
+| DELETE | `/graph/relations` | 删除题目关系边 |
+| GET | `/graph/questions/:number/prerequisites` | 查询前置题 |
+| GET | `/graph/questions/:number/next` | 查询进阶题 |
+| GET | `/graph/questions/:number/recommendations` | 获取推荐题目 |
+| GET | `/graph/path?start=&end=` | 查找学习路径 |
 
-**调用示例**：`GET /relation/`
+#### AI 智能分析（需启用 AI 配置）
 
-**响应示例**：
-```json
-{
-  "result": [
-    {
-      "id": 1,
-      "source_id": 10,
-      "target_id": 12,
-      "relation": "PREREQUISITE"
-    }
-  ]
-}
-```
+| 方法 | 路径 | 描述 |
+|-----|------|------|
+| POST | `/graph/analyze/questions/:number` | AI 分析题目关系（前置/相似） |
+| POST | `/graph/analyze/skills` | AI 自动构建技能树 |
 
-### 节点管理
-- `GET /node/` - 获取节点列表
+<details>
+<summary><b>请求/响应示例</b></summary>
 
-**调用示例**：`GET /node/`
-
-**响应示例**：
-```json
-{
-  "result": [
-    {
-      "id": 1,
-      "name": "数组",
-      "type": "tag",
-      "content": "数组相关基础概念"
-    }
-  ]
-}
-```
-
-### 知识图谱（Neo4j）
-说明：以下接口仅在 Neo4j 连接初始化成功时才会注册（否则 `/graph/*` 不可用）。题目标识使用 `question_number`（如 1001）。
-
-- `POST /graph/questions/:number/sync` - 同步题目节点 + 标签节点/边 + 同标签题目边（写入 Neo4j）
-
-说明：该接口会将题目写入 `(:Question)`，并根据题目 `tags` 自动：
-- 创建/更新 `(:Skill)` 节点
-- 建立 `(Question)-[:HAS_SKILL]->(Skill)` 边（auto=true）
-- 建立题目间 `(:Question)-[:TAG_SIMILAR]->(:Question)` 边（auto=true，weight=共同标签数量）
-
-**调用示例**：`POST /graph/questions/1001/sync`
-
-**响应示例**：
-```json
-{ "message": "题目、标签及同标签关系同步成功" }
-```
-
-- `POST /graph/relations` - 创建题目关系边
-
-**请求示例**：
+**创建关系边** `POST /graph/relations`
 ```json
 {
   "from_question": 1001,
@@ -333,81 +434,21 @@ go build -o PatreonOJ.exe cmd/PatreonOJ/main.go
 }
 ```
 
-**响应示例**：
+**AI 分析技能树** `POST /graph/analyze/skills`
 ```json
-{ "message": "关系创建成功" }
-```
-
-- `DELETE /graph/relations` - 删除题目关系边
-
-**请求示例**：
-```json
+// 响应示例
 {
-  "from_question": 1001,
-  "to_question": 1002,
-  "relation_type": "PREREQUISITE"
+  "message": "技能树分析完成",
+  "relations": [
+    {"parent_skill": "数组", "child_skill": "双指针", "reason": "双指针常用于处理数组结构中的问题"},
+    {"parent_skill": "回溯", "child_skill": "组合枚举", "reason": "回溯算法用于生成所有可能的组合"}
+  ],
+  "saved": 2,
+  "failed": 0
 }
 ```
 
-**响应示例**：
-```json
-{ "message": "关系删除成功" }
-```
-
-- `GET /graph/questions/:number/prerequisites` - 查询前置题
-
-**调用示例**：`GET /graph/questions/1002/prerequisites`
-
-**响应示例**：
-```json
-{
-  "question_number": 1002,
-  "prerequisites": [
-    {
-      "question_number": 1001,
-      "title": "两数之和",
-      "difficulty": "简单",
-      "tags": "数组,哈希表",
-      "status": "published",
-      "created_at": "2026-01-01T00:00:00Z",
-      "updated_at": "2026-01-01T00:00:00Z"
-    }
-  ]
-}
-```
-
-- `GET /graph/questions/:number/next` - 查询可进阶题
-
-**调用示例**：`GET /graph/questions/1001/next`
-
-**响应示例**：
-```json
-{
-  "question_number": 1001,
-  "next_questions": [
-    {
-      "question_number": 1002,
-      "title": "三数之和",
-      "difficulty": "中等",
-      "tags": "数组,双指针",
-      "status": "published",
-      "created_at": "2026-01-01T00:00:00Z",
-      "updated_at": "2026-01-01T00:00:00Z"
-    }
-  ]
-}
-```
-
-- `GET /graph/questions/:number/recommendations?limit=5` - 获取推荐题目
-
-说明：推荐来源包含三类，会通过 `relation_type` 与 `reason` 区分：
-- `NEXT_LEVEL` / `SIMILAR`：题目之间已有关系边
-- `TAG`：同标签推荐（基于 `(:Question)-[:HAS_SKILL]->(:Skill)<-[:HAS_SKILL]-(:Question)`）
-- `TAG_CO_OCCUR`：共现标签推荐（基于 `(:Skill)-[:SKILL_CO_OCCUR]-(:Skill)` 再回到题目）
-
-**调用示例**：`GET /graph/questions/1001/recommendations?limit=5`
-
-**响应示例**：
+**推荐题目响应** `GET /graph/questions/1001/recommendations`
 ```json
 {
   "question_number": 1001,
@@ -419,524 +460,76 @@ go build -o PatreonOJ.exe cmd/PatreonOJ/main.go
       "score": 0.82,
       "reason": "进阶题目",
       "relation_type": "NEXT_LEVEL"
-    },
+    }
+  ]
+}
+```
+</details>
+
+---
+
+### 智能推荐 `/api/v1/recommendations`
+
+| 方法 | 路径 | 描述 |
+|-----|------|------|
+| GET | `/api/v1/recommendations` | 获取个性化推荐题目 |
+
+**参数说明**:
+- `limit`: 返回数量 (默认 10)
+
+```json
+// 响应示例
+{
+  "code": 200,
+  "data": [
     {
-      "question_number": 1010,
-      "title": "两数之和 II",
-      "difficulty": "简单",
-      "score": 2,
-      "reason": "同标签: 2 个",
-      "relation_type": "TAG"
-    },
-    {
-      "question_number": 1020,
-      "title": "最长上升子序列",
+      "question_number": 1002,
+      "title": "三数之和",
       "difficulty": "中等",
-      "score": 5,
-      "reason": "共现标签",
-      "relation_type": "TAG_CO_OCCUR"
+      "reason": "针对性强化: 数组 (当前: 0.45)",
+      "score": 1.0
     }
   ]
 }
 ```
 
-- `GET /graph/path?start=1001&end=1005` - 查找学习路径（最短路径）
+---
 
-**调用示例**：`GET /graph/path?start=1001&end=1005`
+### OSS 文件管理 `/oss`
 
-**响应示例**：
-```json
-{
-  "start_question": 1001,
-  "end_question": 1005,
-  "path": [1001, 1002, 1005],
-  "total_weight": 1.7,
-  "path_length": 2
-}
-```
+| 方法 | 路径 | 描述 |
+|-----|------|------|
+| POST | `/oss/upload` | 上传文件 |
+| GET | `/oss/upload-url` | 获取预签名上传 URL |
+| GET | `/oss/files` | 列出目录内容 |
 
-接口说明：
+**前端直传流程**:
+1. `GET /oss/upload-url?filename=input.txt&path=problems/1001/` → 获取预签名 URL
+2. 前端 PUT 文件到预签名 URL
+3. `POST /testcase/oss/commit` → 落库
 
-GET /graph/node
-响应字段：
-questions: 全部题目节点（QuestionNode）
-skills: 全部技能/标签节点（SkillNode）
-question_relations: 题目-题目关系（PREREQUISITE/NEXT_LEVEL/SIMILAR/CATEGORY 等）
-question_skill_relations: 题目-技能关系（HAS_SKILL）
-skill_relations: 技能-技能关系（SKILL_CO_OCCUR/SKILL_SUBSUMES）
-edges: 统一边列表（from/to 使用 Q:1001、S:array 形式，便于前端直接绘图）
-count: 题目数量
-skill_count: 技能数量
-edge_count: 边数量
+---
 
-### 智能推荐
-- `POST /api/v1/recommendations` - 智能题目推荐（基于用户掌握度 + Neo4j 知识图谱）
+### 其他接口
 
-**请求示例（默认模式）**：
-```json
-{
-  "user_id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
-  "mode": "default",
-  "limit": 20,
-  "constraints": {
-    "mastery_threshold": 0.7,
-    "difficulty_tolerance": 1,
-    "max_depth": 6
-  }
-}
-```
+| 模块 | 路径 | 描述 |
+|-----|------|------|
+| 分类 | `/category/` | 分类 CRUD |
+| 节点 | `/node/` | 获取节点列表 |
+| 关系 | `/relation/` | 获取关系列表 |
+| 首页 | `/overview/getHomeText` | 获取首页文本 |
+| 公告 | `/overview/getAnnouncement` | 获取公告 |
 
-**请求示例（目标模式）**：
-```json
-{
-  "user_id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
-  "mode": "target",
-  "target_question": 1005
-}
-```
+---
 
-**响应示例**：
-```json
-{
-  "recommendations": [
-    {
-      "question_id": "1002",
-      "score": 0.83,
-      "breakdown": {
-        "improvement": 0.9,
-        "consolidation": 0,
-        "diversity": 0.6
-      },
-      "explanation": {
-        "path": ["1001→1002"],
-        "edge_types": ["NEXT_LEVEL"],
-        "edge_weights": [1],
-        "confidence": 0.83
-      }
-    }
-  ]
-}
-```
+## 📄 License
 
-### 测试用例管理
-- `GET /testcase/` - 获取测试用例列表
-- `GET /testcase/question/:number` - 根据题目编号获取测试用例
-- `GET /testcase/:id` - 获取单个测试用例详情
-- `POST /testcase/` - 添加单个测试用例
-- `POST /testcase/batch` - 批量添加测试用例
-- `PUT /testcase/:id` - 更新测试用例
-- `DELETE /testcase/:id` - 删除测试用例
+MIT License © 2024-2026
 
-#### POST 接口 JSON 格式
+---
 
-**添加单个测试用例** `POST /testcase/`
-```json
-{
-    "question_number": 1001,
-    "input": "1 2",
-    "expected_output": "3",
-    "is_hidden": false
-}
-```
+<p align="center">
+  <sub>Built with ❤️ using Go</sub>
+</p>
 
-**批量添加测试用例** `POST /testcase/batch`
-```json
-{
-    "question_number": 1001,
-    "test_cases": [
-        {
-            "input": "1 2",
-            "expected_output": "3",
-            "is_hidden": false
-        },
-        {
-            "input": "5 10",
-            "expected_output": "15",
-            "is_hidden": true
-        }
-    ]
-}
-```
-
-**删除测试用例** `DELETE /testcase/:id`
-```json
-{
-    "id": 1
-}
-```
-
-
-**字段说明：**
-- `question_number`: 题目编号（必填）
-- `input`: 输入数据（必填）
-- `expected_output`: 期望输出（必填）
-- `is_hidden`: 是否隐藏测试用例（可选，默认false）
-
-### 代码评测
-- `POST /submission/` - 提交代码
-- `GET /submission/:id` - 获取提交结果
-
-#### POST 接口 JSON 格式
-
-**提交代码** `POST /submission/`
-```json
-{
-    "user_id": "用户UUID",
-    "question_number": 1001,
-    "code": "提交的代码内容",
-    "language": "cpp"
-}
-```
-
-**字段说明：**
-- `user_id`: 用户UUID（必填）
-- `question_number`: 题目编号，如1001、1002等（必填）
-- `code`: 提交的代码内容（必填）
-- `language`: 编程语言（必填），支持的语言：
-  - `go`: Go语言
-  - `cpp`: C++语言
-  - `python`: Python语言
-  - `java`: Java语言
-
-**响应示例：**
-```json
-{
-    "submission_id": "550e8400-e29b-41d4-a716-446655440000",
-    "user_id": "用户UUID",
-    "question_number": 1001,
-    "question_id": 1,
-    "status": "pending",
-    "message": "代码已提交，正在评测中",
-    "created_at": "2024-01-01T12:00:00Z"
-}
-```
-
-**评测结果状态：**
-- `pending`: 等待评测
-- `judging`: 评测中
-- `accepted`: 通过
-- `wrong_answer`: 答案错误
-- `time_limit_exceeded`: 超时
-- `memory_limit_exceeded`: 内存超限
-- `runtime_error`: 运行时错误
-- `compile_error`: 编译错误
-- `system_error`: 系统错误
-
-### 提交记录查询
-
-说明：
-- 题目提交记录查询接口为公开接口，不需要身份验证；默认游客状态下可查看该题的全部提交记录。
-- 个人提交记录查询接口需要身份验证。当前版本支持两种方式传递登录身份（二选一）：
-  - 请求头：`X-User-UUID: <用户UUID>`
-  - 查询参数：`operator_uuid=<用户UUID>`
-
-#### 1) 题目提交记录查询（公开）
-- `GET /api/problems/:question_number/submissions`
-
-**查询参数：**
-- 必选：`question_number`（路径参数）
-- 可选：
-  - `page`（默认 1）
-  - `size`（默认 20，最大 100）
-  - `status`（筛选提交状态）
-  - `language`（筛选语言）
-
-**权限规则：**
-- 无需登录，所有访问者默认可查看该题全部提交记录
-
-**请求示例：**
-```bash
-curl "http://localhost:8080/api/problems/1001/submissions?page=1&size=20&status=completed&language=go"
-```
-
-#### 2) 个人提交记录查询
-- `GET /api/users/:user_id/submissions`
-
-**查询参数：**
-- 必选：`user_id`（路径参数，用户UUID）
-- 可选：
-  - `problem_id`（筛选题目；支持题目编号 question_number 或内部题目ID）
-  - `page`（默认 1）
-  - `size`（默认 20，最大 100）
-  - `status`（筛选提交状态）
-  - `language`（筛选语言）
-
-**权限规则：**
-- 仅可查看自己的提交；管理员可查看任意用户
-
-**请求示例：**
-```bash
-curl -H "X-User-UUID: <你的UUID>" "http://localhost:8080/api/users/<你的UUID>/submissions?page=1&size=20"
-```
-
-#### 响应结构（两者一致）
-```json
-{
-  "total": 123,
-  "page": 1,
-  "size": 20,
-  "pages": 7,
-  "items": [
-    {
-      "submission_id": "550e8400-e29b-41d4-a716-446655440000",
-      "user_id": "用户UUID",
-      "question_number": 1001,
-      "submitted_at": "2026-01-01T12:00:00Z",
-      "status": "completed",
-      "runtime_ms": 12,
-      "memory_kb": 2048,
-      "language": "go",
-      "code_length": 345
-    }
-  ]
-}
-```
-
-### OJ首页相关路由
-- `GET /overview/getHomeText` - 获取OJ首页文本
-- `POST /overview/updateHomeText` - 更新OJ首页文本
-- `GET /overview/getAnnouncement` - 获取公告
-- `POST /overview/updateAnnouncement` - 更新公告
-
-#### POST 接口 JSON 格式
-
-**更新OJ首页文本** `POST /overview/updateHomeText`
-```json
-{
-    "home_text": "更新后的OJ首页文本"
-}
-```
-
-**更新公告** `POST /overview/updateAnnouncement`
-```json
-{
-    "announcement": "更新后的公告内容"
-}
-```
-
-### OSS文件管理
-#### A. 文件上传接口
-*   **URL**: `POST /oss/upload`
-*   **Content-Type**: `multipart/form-data`
-*   **参数**:
-    *   `file`: (必须) 要上传的文件。
-    *   `path`: (可选) 目标目录前缀，如 `problems/1001/`。默认为 `uploads/`。
-*   **响应示例**:
-    ```json
-    {
-        "message": "上传成功",
-        "key": "problems/1001/uuid-filename.txt",
-        "size": 1024,
-        "etag": "..."
-    }
-    ```
-
-前端对接流程
-
-1. 第一步：获取上传链接
-   
-   - 请求： GET /oss/upload-url?filename=input.txt&path=problems/1001/
-   - 响应：
-     ```
-     {
-         "url": "http://minio:9000/
-         bucket/problems/1001/xxx.
-         txt?Signature=...",
-         "key": "problems/1001/xxx.
-         txt",
-        "bucket": "patreon-oj-cases"
-     }
-     ```
-2. 第二步：前端直传 MinIO
-   
-   - 前端使用 PUT 方法，将文件二进制流直接发送到 url 。
-   - 注意 ：不要带自定义 Header（除非后端签名时加了）， Content-Type 最好设为文件真实类型或 application/octet-stream 。
-3. 第三步：保存元数据（可选但推荐）
-   
-   - 上传成功后，前端将 key 发送给业务后端（比如创建题目接口），后端将这个 key 存入数据库。
-
-#### B. 目录结构展示接口
-*   **URL**: `GET /oss/files`
-*   **参数**:
-    *   `prefix`: (可选) 目录路径，如 `problems/`。
-    *   `recursive`: (可选) `true` 或 `false`。设为 `false` 时模拟文件夹结构。
-*   **响应示例**:
-    ```json
-    {
-        "prefix": "problems/",
-        "objects": [
-            {
-                "key": "problems/1001/",
-                "size": 0,
-                "is_dir": true,
-                "last_modified": "..."
-            },
-            {
-                "key": "problems/readme.txt",
-                "size": 500,
-                "is_dir": false,
-                "last_modified": "..."
-            }
-        ]
-    }
-    ```
-
-#### C. 前缀公开读（头像等静态资源）
-项目支持在服务启动时为同一个桶内的指定前缀自动配置“匿名公开读”（仅允许 `s3:GetObject` 访问该前缀下的对象），常用于头像等需要稳定 URL 的静态资源。
-
-**配置**
-在 `config.yaml` 增加 `oss.public_read_prefixes`：
-
-```yaml
-oss:
-  bucket_name: "patreon-oj-cases"
-  public_address: "localhost:9090"
-  public_read_prefixes: ["avatars/"]
-```
-
-**访问 URL 规则**
-公开读生效后，可直接通过以下格式访问对象：
-
-- `http(s)://{public_address}/{bucket_name}/{key}`
-- 示例：`http://localhost:9000/patreon-oj-cases/avatars/<user_uuid>/avatar.jpg`
-
-**注意事项**
-- 该功能需要配置的 `access_key/secret_key` 具备写桶策略（Bucket Policy）的权限。
-- 当前实现会直接设置桶策略；如果桶上已有自定义策略，需自行合并后再应用，避免被覆盖。
-- 建议仅对白名单前缀（如 `avatars/`）开放，不要整桶公开。
-
-如何使用（前端直传 OSS + commit）
-
-- 约定 key 命名（推荐）： problems/{questionNumber}/{caseNo}.in 、 problems/{questionNumber}/{caseNo}.out
-- 前端用 GET /oss/upload-url 获取预签名 PUT（你们项目里已存在该接口），把 .in/.out 直接上传到 OSS
-- 上传成功后调用后端落库：
-```
-POST /testcase/oss/commit
-{
-  "question_number": 1001,
-  "input_key": "problems/1001/1.in",
-  "output_key": "problems/1001/1.out",
-  "is_hidden": true
-}
-```
-
-## 项目结构
-
-```
-PatreonOJ/
-├── cmd/                   # 命令行工具
-│   └── PatreonOJ/
-│       └── main.go       # 程序入口
-├── internal/             # 内部模块
-│   ├── Controllers/      # 控制器层
-│   │   └── admin/       # 管理员控制器
-│   │       ├── userController.go      # 用户管理控制器
-│   │       ├── questionController.go  # 题目管理控制器
-│   │       ├── categoryController.go  # 分类管理控制器
-│   │       ├── testCaseController.go  # 测试用例管理控制器
-│   │       ├── nodeController.go      # 节点管理控制器
-│   │       ├── relationController.go  # 关系管理控制器
-│   │       └── submissionController.go # 提交管理控制器
-│   ├── models/          # 数据模型层
-│   │   ├── core.go     # 数据库初始化
-│   │   ├── user.go     # 用户模型
-│   │   ├── question.go # 题目和测试用例模型
-│   │   ├── submission.go # 提交记录模型
-│   │   ├── category.go # 分类模型
-│   │   └── *.go        # 其他数据模型
-│   ├── routers/        # 路由层
-│   │   └── routers.go  # 路由配置
-│   ├── services/       # 服务层
-│   │   ├── judge_service.go # 评测服务
-│   │   └── local_judge.go   # 本地评测服务
-│   └── config/         # 配置管理
-│       └── config.go   # 配置结构体
-├── sandbox/            # 沙箱目录（本地评测）
-├── data/              # 数据目录（SQLite数据库）
-├── logs/              # 日志目录
-├── config.yaml        # 配置文件
-├── go.mod            # Go模块文件
-├── go.sum            # Go模块依赖
-└── README.md         # 项目说明文档
-```
-
-
-## 开发说明
-
-### 数据库迁移
-系统启动时会自动执行数据库表迁移，无需手动创建表结构。
-
-### 添加新模型
-1. 在 `internal/models/` 目录下创建新的模型文件
-2. 在 `internal/models/core.go` 的 `AutoMigrate()` 函数中添加新模型
-
-### 添加新控制器
-1. 在 `internal/Controllers/admin/` 目录下创建新的控制器文件
-2. 在 `internal/routers/routers.go` 中添加相应的路由配置
-
-### 本地评测系统
-本地评测系统提供完整的代码编译和执行功能：
-
-#### 支持的编程语言
-- **Go**: 使用 `go build` 编译，支持标准输入输出
-- **C++**: 使用 `g++` 编译，支持标准输入输出
-- **Python**: 直接使用 `python` 解释器执行
-- **Java**: 使用 `javac` 编译，`java` 执行
-
-#### 安全机制
-- **沙箱隔离**: 每次评测在独立的沙箱目录中进行
-- **资源限制**: 支持内存、时间、输出大小限制
-- **自动清理**: 评测完成后自动清理临时文件
-
-#### 环境要求
-确保系统已安装相应的编译器和解释器：
-- Go: `go version` 检查Go环境
-- C++: `g++ --version` 检查GCC环境
-- Python: `python --version` 检查Python环境
-- Java: `javac -version` 和 `java -version` 检查Java环境
-
-
-### 环境切换
-通过修改 `config.yaml` 中的相关配置即可切换：
-
-#### 数据库切换
-修改 `database.type` 字段：
-- 开发环境：推荐使用 SQLite
-- 生产环境：推荐使用 MySQL
-
-#### 评测模式切换
-修改 `judge.mode` 字段：
-- 本地评测：设置为 "local"（推荐）
-- 远程评测：设置为 "remote"
-
-## 注意事项
-
-1. **SQLite 数据库文件**: 确保 SQLite 数据库文件的目录具有写权限
-2. **MySQL 连接**: 确保 MySQL 服务正在运行且连接信息正确
-3. **配置文件**: 首次运行前请检查并修改配置文件中的相关参数
-4. **端口占用**: 确保配置的端口未被其他程序占用
-5. **测试用例管理**: 每个题目至少需要一个测试用例才能进行代码评测
-6. **数据完整性**: 删除题目时会自动删除相关的测试用例和提交记录
-7. **本地评测环境**: 
-   - 确保系统已安装所需的编译器和解释器
-   - Windows系统需要正确配置PATH环境变量
-   - 沙箱目录需要有读写权限
-8. **路径问题**: 
-   - Windows系统下注意路径分隔符问题
-   - 建议使用绝对路径配置沙箱目录
-9. **资源限制**: 
-   - 本地评测的资源限制依赖于系统配置
-   - 建议根据服务器性能调整相关参数
-
-## 技术栈
-
-- **后端框架**: Gin
-- **ORM**: GORM
-- **数据库**: MySQL / SQLite
-- **配置管理**: Viper
-- **UUID**: Google UUID
-- **本地评测**: 
-  - Go编译器
-  - GCC (C++)
-  - Python解释器
-  - Java编译器和虚拟机
+---
