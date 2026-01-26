@@ -15,6 +15,16 @@ type Config struct {
 	Judge         JudgeConfig         `mapstructure:"judge"`
 	Log           LogConfig           `mapstructure:"log"`
 	OSS           OSSConfig           `mapstructure:"oss"`
+	AI            AIConfig            `mapstructure:"ai"`
+}
+
+// AIConfig AI服务配置
+type AIConfig struct {
+	Enabled     bool    `mapstructure:"enabled"`
+	APIKey      string  `mapstructure:"api_key"`
+	BaseURL     string  `mapstructure:"base_url"`
+	Model       string  `mapstructure:"model"`
+	Temperature float64 `mapstructure:"temperature"`
 }
 
 // OSSConfig OSS配置
@@ -73,18 +83,20 @@ type ServerConfig struct {
 
 // JudgeConfig 评测服务配置
 type JudgeConfig struct {
-	Mode      string            `mapstructure:"mode"`
-	APIURL    string            `mapstructure:"api_url"`
-	Timeout   int               `mapstructure:"timeout"`
-	QueueSize int               `mapstructure:"queue_size"`
-	Local     LocalJudgeConfig  `mapstructure:"local"`
-	GoJudge   GoJudgeConfig     `mapstructure:"go_judge"`
+	Mode      string           `mapstructure:"mode"`
+	APIURL    string           `mapstructure:"api_url"`
+	Timeout   int              `mapstructure:"timeout"`
+	QueueSize int              `mapstructure:"queue_size"`
+	Local     LocalJudgeConfig `mapstructure:"local"`
+	GoJudge   GoJudgeConfig    `mapstructure:"go_judge"`
 }
 
 type GoJudgeConfig struct {
-	Enabled bool   `mapstructure:"enabled"`
-	APIURL  string `mapstructure:"api_url"`
-	Token   string `mapstructure:"token"`
+	Enabled   bool   `mapstructure:"enabled"`
+	APIURL    string `mapstructure:"api_url"`
+	Token     string `mapstructure:"token"`
+	MaxMemory int    `mapstructure:"max_memory"`
+	MaxTime   int    `mapstructure:"max_time"`
 }
 
 // LocalJudgeConfig 本地评测配置
@@ -159,10 +171,12 @@ func setDefaults() {
 	viper.SetDefault("judge.local.enabled", true)
 	viper.SetDefault("judge.local.sandbox_dir", "./sandbox")
 	viper.SetDefault("judge.local.max_memory", 128)
-	viper.SetDefault("judge.local.max_time", 5)
+	viper.SetDefault("judge.local.max_time", 5000)
 	viper.SetDefault("judge.local.max_output_size", 1024)
 	viper.SetDefault("judge.local.supported_languages", []string{"go", "python", "cpp", "java"})
 
+	viper.SetDefault("judge.go_judge.max_memory", 256)
+	viper.SetDefault("judge.go_judge.max_time", 5000)
 	viper.SetDefault("judge.local.executor", "host")
 	viper.SetDefault("judge.local.docker_image_go", "golang:1.22-bookworm")
 	viper.SetDefault("judge.local.docker_image_cpp", "gcc:13-bookworm")
@@ -182,6 +196,12 @@ func setDefaults() {
 	viper.SetDefault("graph_database.neo4j.username", "neo4j")
 	viper.SetDefault("graph_database.neo4j.password", "password")
 	viper.SetDefault("graph_database.neo4j.database", "neo4j")
+
+	// AI服务默认配置
+	viper.SetDefault("ai.enabled", false)
+	viper.SetDefault("ai.base_url", "https://api.openai.com/v1") // 默认OpenAI地址
+	viper.SetDefault("ai.model", "gpt-3.5-turbo")
+	viper.SetDefault("ai.temperature", 0.7)
 }
 
 // GetDatabaseDSN 根据配置类型获取数据库连接字符串

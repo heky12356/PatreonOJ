@@ -6,15 +6,22 @@ import (
 
 	"dachuang/internal/Controllers"
 	"dachuang/internal/Controllers/admin"
+	"dachuang/internal/config"
 	"dachuang/internal/graph"
 	"dachuang/internal/models"
 	"dachuang/internal/oss"
+	"dachuang/internal/services"
 
 	"github.com/gin-gonic/gin"
 )
 
 func RoutersInit(r *gin.Engine, ossClient *oss.OSS, graphService *graph.QuestionGraphService) {
 	userCtrl := admin.NewUserController(models.DB, ossClient, graphService)
+
+	// 初始化业务服务
+	assessmentService := services.NewAssessmentService(models.DB, graphService)
+	recommendationService := services.NewRecommendationService(models.DB, graphService, assessmentService)
+	aiService := services.NewAIService(config.GlobalConfig.AI)
 
 	// 用户相关路由
 	userRouter := r.Group("/user")
@@ -38,7 +45,11 @@ func RoutersInit(r *gin.Engine, ossClient *oss.OSS, graphService *graph.Question
 
 	apiV1Router := r.Group("/api/v1")
 	{
-		apiV1Router.POST("/recommendations", userCtrl.GetRecommendationsV1)
+		recCtrl := admin.NewRecommendationController(recommendationService)
+		apiV1Router.GET("/recommendations", recCtrl.GetRecommendations)
+
+		// 统计类接口
+		apiV1Router.GET("/user/stats/radar", userCtrl.GetUserRadarStats)
 	}
 
 	apiRouter := r.Group("/api")
@@ -54,7 +65,7 @@ func RoutersInit(r *gin.Engine, ossClient *oss.OSS, graphService *graph.Question
 		questionRouter.GET("/", questionCtrl.Index)
 		questionRouter.GET("/new", questionCtrl.GetNewProblems)
 		questionRouter.GET("/id/:question_id", questionCtrl.ShowByQuestionID) // 通过自定义question_id获取单个题目
-		questionRouter.GET("/:number", questionCtrl.Show)                    // 通过题目编号获取单个题目
+		questionRouter.GET("/:number", questionCtrl.Show)                     // 通过题目编号获取单个题目
 		questionRouter.POST("/", questionCtrl.Store)
 		questionRouter.POST("/:number", questionCtrl.Update) // 改为使用题目编号
 		questionRouter.DELETE("/delete", questionCtrl.DeleteProblem)
@@ -112,9 +123,15 @@ func RoutersInit(r *gin.Engine, ossClient *oss.OSS, graphService *graph.Question
 			if err := graphService.InitGraph(context.Background(), models.DB); err != nil {
 				log.Printf("Warning: Failed to init graph: %v", err)
 			}
-			graphCtrl := Controllers.NewGraphController(models.DB, graphService)
+			graphCtrl := Controllers.NewGraphController(models.DB, graphService, aiService)
 			// 获取所有题目节点
 			graphRouter.GET("/node", graphCtrl.ListQuestions)
+
+			// AI 分析接口
+			graphRouter.POST("/analyze/questions/:number", graphCtrl.AnalyzeQuestionRelations)
+			graphRouter.POST("/analyze/skills", graphCtrl.AnalyzeSkillTree)
+
+			// 题目相关图操作
 			graphRouter.POST("/questions/:number/sync", graphCtrl.SyncQuestion)
 
 			// 关系管理

@@ -2,13 +2,18 @@ package Controllers
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"dachuang/internal/graph"
 	"dachuang/internal/models"
+
+	"dachuang/internal/services" // Import services package
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -18,13 +23,15 @@ import (
 type GraphController struct {
 	db           *gorm.DB
 	graphService *graph.QuestionGraphService
+	aiService    *services.AIService
 }
 
 // NewGraphController 创建新的图控制器
-func NewGraphController(db *gorm.DB, graphService *graph.QuestionGraphService) *GraphController {
+func NewGraphController(db *gorm.DB, graphService *graph.QuestionGraphService, aiService *services.AIService) *GraphController {
 	return &GraphController{
 		db:           db,
 		graphService: graphService,
+		aiService:    aiService,
 	}
 }
 
@@ -353,4 +360,190 @@ func (gc *GraphController) ListQuestions(c *gin.Context) {
 // InitGraph 初始化图数据库，同步题目节点和关系
 func (gc *GraphController) InitGraph(ctx context.Context) error {
 	return gc.graphService.InitGraph(ctx, gc.db)
+}
+
+// AnalyzeQuestionRelations 调用AI分析题目关系
+func (gc *GraphController) AnalyzeQuestionRelations(c *gin.Context) {
+	questionNumberStr := c.Param("number")
+	questionNumber, err := strconv.Atoi(questionNumberStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的题目编号"})
+		return
+	}
+
+	// 1. 获取目标题目信息
+	var targetQuestion models.Question
+	if err := gc.db.Where("question_number = ?", questionNumber).First(&targetQuestion).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "题目不存在"})
+		return
+	}
+
+	// 2. 智能获取候选题目列表
+	// 策略：优先同标签题目 + 相近难度，排除自身，限制数量节省 Token
+	var candidateQuestions []models.Question
+
+	// 解析目标题目的标签
+	targetTags := strings.Split(targetQuestion.Tags, ",")
+	for i := range targetTags {
+		targetTags[i] = strings.TrimSpace(targetTags[i])
+	}
+
+	// 构建 LIKE 查询条件：任一标签匹配
+	tagConditions := make([]string, 0, len(targetTags))
+	tagArgs := make([]interface{}, 0, len(targetTags))
+	for _, tag := range targetTags {
+		if tag != "" {
+			tagConditions = append(tagConditions, "tags LIKE ?")
+			tagArgs = append(tagArgs, "%"+tag+"%")
+		}
+	}
+
+	query := gc.db.Where("question_number != ?", questionNumber)
+	if len(tagConditions) > 0 {
+		// 优先匹配同标签题目
+		query = query.Where("("+strings.Join(tagConditions, " OR ")+")", tagArgs...)
+	}
+	// 按难度相近排序（同难度优先）
+	orderClause := fmt.Sprintf("CASE WHEN difficulty = '%s' THEN 0 ELSE 1 END", targetQuestion.Difficulty)
+	query.Order(orderClause).Limit(30).Find(&candidateQuestions)
+
+	// 如果同标签题目不足，补充其他题目
+	if len(candidateQuestions) < 20 {
+		var extraQuestions []models.Question
+		existingIDs := make([]int, len(candidateQuestions)+1)
+		existingIDs[0] = questionNumber
+		for i, q := range candidateQuestions {
+			existingIDs[i+1] = q.QuestionNumber
+		}
+		gc.db.Where("question_number NOT IN ?", existingIDs).
+			Limit(20 - len(candidateQuestions)).
+			Find(&extraQuestions)
+		candidateQuestions = append(candidateQuestions, extraQuestions...)
+	}
+
+	targetJSON, _ := json.Marshal(map[string]interface{}{
+		"id":         targetQuestion.QuestionNumber,
+		"title":      targetQuestion.Title,
+		"tags":       targetQuestion.Tags,
+		"difficulty": targetQuestion.Difficulty,
+	})
+
+	candidates := make([]map[string]interface{}, 0, len(candidateQuestions))
+	for _, q := range candidateQuestions {
+		if q.QuestionNumber == questionNumber {
+			continue
+		}
+		candidates = append(candidates, map[string]interface{}{
+			"id":         q.QuestionNumber,
+			"title":      q.Title,
+			"tags":       q.Tags,
+			"difficulty": q.Difficulty,
+		})
+	}
+	candidatesJSON, _ := json.Marshal(candidates)
+
+	ctx := context.Background()
+	relations, err := gc.aiService.AnalyzeQuestionRelations(ctx, string(targetJSON), string(candidatesJSON))
+	if err != nil {
+		log.Printf("AI分析失败: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "AI分析失败: " + err.Error()})
+		return
+	}
+
+	// 4. 保存关系到图数据库
+	count := 0
+	for _, rel := range relations {
+		// 转换关系类型字符串
+		var relType graph.RelationshipType
+		switch rel.RelationType {
+		case "PREREQUISITE":
+			relType = graph.PREREQUISITE
+		case "SIMILAR":
+			relType = graph.SIMILAR
+		default:
+			continue
+		}
+
+		graphRel := graph.QuestionRelation{
+			FromQuestionNumber: rel.SourceID,
+			ToQuestionNumber:   rel.TargetID, // AI返回的TargetID应该是当前题目ID
+			RelationType:       relType,
+			Weight:             1.0,
+			Description:        rel.Reason,
+			CreatedAt:          time.Now().UTC(),
+		}
+
+		if rel.TargetID == 0 { // 如果AI没填TargetID，默认是当前题目
+			graphRel.ToQuestionNumber = questionNumber
+		}
+
+		if err := gc.graphService.CreateRelation(ctx, graphRel); err == nil {
+			count++
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message":   "分析完成",
+		"relations": relations,
+		"saved":     count,
+	})
+}
+
+// AnalyzeSkillTree 调用AI构建技能树
+func (gc *GraphController) AnalyzeSkillTree(c *gin.Context) {
+	ctx := context.Background()
+
+	// 1. 获取所有技能
+	skills, err := gc.graphService.ListSkills(ctx)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "获取技能列表失败"})
+		return
+	}
+
+	if len(skills) == 0 {
+		c.JSON(http.StatusOK, gin.H{"message": "暂无技能数据", "relations": []interface{}{}, "saved": 0})
+		return
+	}
+
+	// 构建 Name -> Key 映射 (AI 返回的是 Name，图数据库需要 Key)
+	nameToKey := make(map[string]string, len(skills))
+	skillNames := make([]string, 0, len(skills))
+	for _, s := range skills {
+		nameToKey[s.Name] = s.Key
+		skillNames = append(skillNames, s.Name)
+	}
+
+	// 2. 调用AI分析技能依赖关系
+	relations, err := gc.aiService.AnalyzeSkillTree(ctx, skillNames)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "AI分析失败: " + err.Error()})
+		return
+	}
+
+	// 3. 保存关系到图数据库
+	saved, failed := 0, 0
+	for _, rel := range relations {
+		fromKey, ok1 := nameToKey[rel.ParentSkill]
+		toKey, ok2 := nameToKey[rel.ChildSkill]
+
+		if !ok1 || !ok2 {
+			failed++
+			continue
+		}
+
+		// 创建 SKILL_SUBSUMES 关系 (Parent -> Child)
+		if err := gc.graphService.CreateSkillRelation(ctx, fromKey, toKey, graph.SKILL_SUBSUMES, rel.Reason); err != nil {
+			log.Printf("创建技能关系失败 %s->%s: %v", fromKey, toKey, err)
+			failed++
+		} else {
+			saved++
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message":   "技能树分析完成",
+		"relations": relations,
+		"saved":     saved,
+		"failed":    failed,
+	})
 }

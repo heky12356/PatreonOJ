@@ -35,6 +35,14 @@ const (
 	TAG_CO_OCCUR RelationshipType = "TAG_CO_OCCUR"
 )
 
+// SkillRelationType 技能关系类型枚举
+type SkillRelationType string
+
+const (
+	SKILL_SUBSUMES SkillRelationType = "SKILL_SUBSUMES" // 包含/依赖关系
+	SKILL_CO_OCCUR SkillRelationType = "SKILL_CO_OCCUR" // 共现/相关关系
+)
+
 // QuestionRelation 题目关系结构
 type QuestionRelation struct {
 	FromQuestionNumber int              `json:"from_question_number"`
@@ -63,4 +71,13 @@ type RecommendationResult struct {
 	Score          float64          `json:"score"`  // 推荐分数
 	Reason         string           `json:"reason"` // 推荐理由
 	RelationType   RelationshipType `json:"relation_type"`
+	SkillKey       string           `json:"skill_key"` // 关联技能(可选)
+}
+
+// SkillNodeStatus 技能节点状态
+type SkillNodeStatus struct {
+	SkillKey      string   `json:"skill_key"`
+	Mastery       float64  `json:"mastery"`
+	Status        string   `json:"status"` // "LOCKED", "UNLOCKING", "MASTERED"
+	Prerequisites []string `json:"prerequisites"`
 }

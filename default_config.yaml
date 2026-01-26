@@ -47,7 +47,8 @@ judge:
     executor: docker
     sandbox_dir: ./sandbox
     max_memory: 256
-    max_time: 5
+    # ms为单位
+    max_time: 5000
     max_output_size: 1024
     docker_image_go: golang:1.22-bookworm
     docker_image_cpp: gcc:13-bookworm
@@ -68,3 +69,17 @@ log:
   format: "json"  # json, text
   output: "stdout"  # stdout, file
   file_path: "./logs/app.log"
+
+# AI 服务配置 (支持 OpenAI / Ollama / 其他兼容服务)
+ai:
+  enabled: false  # 是否启用 AI 功能
+  # Ollama 本地部署示例:
+  # base_url: "http://localhost:11434/v1"
+  # api_key: ""  # Ollama 不需要 API Key
+  # model: "qwen2.5:7b"
+  
+  # OpenAI 示例:
+  base_url: "https://api.openai.com/v1"
+  api_key: ""  # 填入你的 API Key
+  model: "gpt-3.5-turbo"
+  temperature: 0.7  # 生成温度，0-1，越高越随机
