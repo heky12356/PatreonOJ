@@ -3,13 +3,14 @@ package services
 import (
 	"bytes"
 	"context"
-	"dachuang/internal/config"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 	"time"
+
+	"dachuang/internal/config"
 )
 
 // AIService AI服务
@@ -140,11 +141,8 @@ func (s *AIService) AnalyzeQuestionRelations(ctx context.Context, newQuestion st
 		return nil, err
 	}
 
-	// 清理可能的 Markdown 标记
-	respContent = strings.TrimSpace(respContent)
-	respContent = strings.TrimPrefix(respContent, "```json")
-	respContent = strings.TrimPrefix(respContent, "```")
-	respContent = strings.TrimSuffix(respContent, "```")
+	// 清理AI响应（移除思考过程和Markdown标记）
+	respContent = cleanAIResponse(respContent)
 
 	var relations []QuestionRelation
 	if err := json.Unmarshal([]byte(respContent), &relations); err != nil {
@@ -180,10 +178,7 @@ func (s *AIService) AnalyzeSkillTree(ctx context.Context, skills []string) ([]Sk
 		return nil, err
 	}
 
-	respContent = strings.TrimSpace(respContent)
-	respContent = strings.TrimPrefix(respContent, "```json")
-	respContent = strings.TrimPrefix(respContent, "```")
-	respContent = strings.TrimSuffix(respContent, "```")
+	respContent = cleanAIResponse(respContent)
 
 	var relations []SkillRelation
 	if err := json.Unmarshal([]byte(respContent), &relations); err != nil {
@@ -191,4 +186,23 @@ func (s *AIService) AnalyzeSkillTree(ctx context.Context, skills []string) ([]Sk
 	}
 
 	return relations, nil
+}
+
+// cleanAIResponse 清理AI响应中的非JSON内容
+// 支持: Markdown代码块、DeepSeek的<think>标签等
+func cleanAIResponse(content string) string {
+	content = strings.TrimSpace(content)
+
+	// 移除 DeepSeek-R1 的思考过程 <think>...</think>
+	if idx := strings.Index(content, "</think>"); idx != -1 {
+		content = content[idx+len("</think>"):]
+		content = strings.TrimSpace(content)
+	}
+
+	// 移除 Markdown 代码块标记
+	content = strings.TrimPrefix(content, "```json")
+	content = strings.TrimPrefix(content, "```")
+	content = strings.TrimSuffix(content, "```")
+
+	return strings.TrimSpace(content)
 }
