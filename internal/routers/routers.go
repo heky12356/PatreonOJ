@@ -16,7 +16,12 @@ import (
 )
 
 func RoutersInit(r *gin.Engine, ossClient *oss.OSS, graphService *graph.QuestionGraphService) {
-	userCtrl := admin.NewUserController(models.DB, ossClient, graphService)
+	// 初始化各个控制器
+	userCtrl := admin.NewUserController(models.DB)
+	authCtrl := admin.NewAuthController(models.DB)
+	submissionCtrl := admin.NewSubmissionController(models.DB, ossClient, graphService)
+	masteryCtrl := admin.NewMasteryController(models.DB)
+	statsCtrl := admin.NewStatsController(graphService)
 
 	// 初始化业务服务
 	assessmentService := services.NewAssessmentService(models.DB, graphService)
@@ -28,19 +33,19 @@ func RoutersInit(r *gin.Engine, ossClient *oss.OSS, graphService *graph.Question
 	{
 		userSolveCtrl := admin.NewUserSolveController(models.DB)
 		userRouter.GET("/", userCtrl.Index)
-		userRouter.POST("/login", userCtrl.Login)
-		userRouter.POST("/register", userCtrl.Register)
-		userRouter.POST("/logout", userCtrl.Logout)
+		userRouter.POST("/login", authCtrl.Login)
+		userRouter.POST("/register", authCtrl.Register)
+		userRouter.POST("/logout", authCtrl.Logout)
 		userRouter.GET("/solves/:uuid", userSolveCtrl.Index)
 		userRouter.GET("/solve/", userSolveCtrl.Show)
 
 		userRouter.GET("/:uuid", userCtrl.Show)
 		userRouter.PUT("/:uuid", userCtrl.Update)
-		userRouter.GET("/:uuid/mastery/questions", userCtrl.ListQuestionMastery)
-		userRouter.GET("/:uuid/mastery/tags", userCtrl.ListTagMastery)
-		userRouter.POST("/:uuid/mastery/events", userCtrl.SubmitMasteryEvent)
-		userRouter.DELETE("/:uuid/mastery/questions/:number", userCtrl.DeleteQuestionMastery)
-		userRouter.DELETE("/:uuid/mastery/tags", userCtrl.DeleteTagMastery)
+		userRouter.GET("/:uuid/mastery/questions", masteryCtrl.ListQuestionMastery)
+		userRouter.GET("/:uuid/mastery/tags", masteryCtrl.ListTagMastery)
+		userRouter.POST("/:uuid/mastery/events", masteryCtrl.SubmitMasteryEvent)
+		userRouter.DELETE("/:uuid/mastery/questions/:number", masteryCtrl.DeleteQuestionMastery)
+		userRouter.DELETE("/:uuid/mastery/tags", masteryCtrl.DeleteTagMastery)
 	}
 
 	apiV1Router := r.Group("/api/v1")
@@ -49,13 +54,13 @@ func RoutersInit(r *gin.Engine, ossClient *oss.OSS, graphService *graph.Question
 		apiV1Router.GET("/recommendations", recCtrl.GetRecommendations)
 
 		// 统计类接口
-		apiV1Router.GET("/user/stats/radar", userCtrl.GetUserRadarStats)
+		apiV1Router.GET("/user/stats/radar", statsCtrl.GetUserRadarStats)
 	}
 
 	apiRouter := r.Group("/api")
 	{
-		apiRouter.GET("/problems/:question_number/submissions", userCtrl.ListProblemSubmissions)
-		apiRouter.GET("/users/:user_id/submissions", userCtrl.ListUserSubmissions)
+		apiRouter.GET("/problems/:question_number/submissions", submissionCtrl.ListProblemSubmissions)
+		apiRouter.GET("/users/:user_id/submissions", submissionCtrl.ListUserSubmissions)
 	}
 
 	// 题目相关路由
@@ -98,8 +103,8 @@ func RoutersInit(r *gin.Engine, ossClient *oss.OSS, graphService *graph.Question
 	// 提交相关路由
 	submissionRouter := r.Group("/submission")
 	{
-		submissionRouter.POST("/", userCtrl.SubmitCode)
-		submissionRouter.GET("/:id", userCtrl.GetSubmissionResult)
+		submissionRouter.POST("/", submissionCtrl.SubmitCode)
+		submissionRouter.GET("/:id", submissionCtrl.GetSubmissionResult)
 	}
 
 	// 测试用例相关路由
