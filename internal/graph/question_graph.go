@@ -1478,3 +1478,29 @@ func buildAutoSkillRelations(questions []models.Question) []skillRel {
 
 	return rels
 }
+
+// MarkUserSolvedQuestion 标记用户已完成某题
+func (s *QuestionGraphService) MarkUserSolvedQuestion(ctx context.Context, userID string, questionNumber int) error {
+	if userID == "" || questionNumber <= 0 {
+		return nil
+	}
+
+	query := `
+		MERGE (u:User {user_id: $user_id})
+		MERGE (q:Question {question_number: $question_number})
+		MERGE (u)-[r:SOLVED]->(q)
+		ON CREATE SET r.created_at = datetime(), r.updated_at = datetime()
+		ON MATCH  SET r.updated_at = datetime()
+	`
+
+	params := map[string]interface{}{
+		"user_id":         userID,
+		"question_number": questionNumber,
+	}
+
+	_, err := s.client.ExecuteWrite(ctx, func(tx neo4j.ManagedTransaction) (interface{}, error) {
+		_, err := tx.Run(ctx, query, params)
+		return nil, err
+	})
+	return err
+}

@@ -37,6 +37,10 @@ func (sc *StatsController) GetUserRadarStats(c *gin.Context) {
 	}
 
 	ctx := context.Background()
+	if sc.graphService == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "图服务未初始化"})
+		return
+	}
 	masteries, err := sc.graphService.GetUserMastery(ctx, userUUID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "获取能力数据失败"})

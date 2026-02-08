@@ -1,10 +1,12 @@
 package admin
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"math"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -148,6 +150,7 @@ func (sc *SubmissionController) consumeSubmissions() {
 			log.Printf("保存评测结果失败 - 提交ID: %s, 错误: %v", submission.ID, err)
 		}
 
+		// 判断是否AC
 		allcurrent := true
 		log.Printf("评测结果: %s", submission.Results)
 
@@ -165,32 +168,44 @@ func (sc *SubmissionController) consumeSubmissions() {
 			continue
 		}
 
-		if !allcurrent {
+		if !allcurrent || submission.Status != "completed" || len(parseResults(submission.Results)) == 0 {
 			continue
 		}
 
 		// 4. 更新用户解题列表
+		if question.Id == 0 {
+			_ = sc.db.Where("id = ?", submission.QuestionID).First(&question)
+		}
+
 		var usersolve models.UserSolve
 		if err := sc.db.Where("uuid = ?", submission.UserID).First(&usersolve).Error; err != nil {
 			if err == gorm.ErrRecordNotFound {
 				usersolve.UUID = submission.UserID
-				usersolve.ProblemIDs = strconv.Itoa(submission.QuestionID)
-				sc.db.Create(&usersolve)
+				usersolve.ProblemIDs = strconv.Itoa(question.QuestionNumber)
+				if err := sc.db.Create(&usersolve).Error; err != nil {
+					log.Printf("创建用户解题记录失败 - 用户ID: %s, 错误: %v", submission.UserID, err)
+					continue
+				}
 			} else {
 				log.Printf("查询用户失败 - 用户ID: %s, 错误: %v", submission.UserID, err)
 				continue
 			}
 		}
 
-		if question.Id == 0 {
-			_ = sc.db.Where("id = ?", submission.QuestionID).First(&question)
-		}
-
 		qid := strconv.Itoa(question.QuestionNumber)
 		log.Printf("usersolve.ProblemIDs: %s", usersolve.ProblemIDs)
 
-		if strings.Contains(usersolve.ProblemIDs, qid) {
-			log.Printf("BUG: %s", qid)
+		// 写入图谱 SOLVED 边
+		if sc.graphService != nil {
+			if err := sc.graphService.MarkUserSolvedQuestion(context.Background(), submission.UserID, question.QuestionNumber); err != nil {
+				log.Printf("写入SOLVED边失败 user=%s question=%d err=%v", submission.UserID, question.QuestionNumber, err)
+			}
+		}
+
+		// 去重
+		acSet := strings.Split(usersolve.ProblemIDs, ",")
+		if slices.Contains(acSet, qid) {
+			log.Printf("用户已解题: %s", qid)
 			continue
 		}
 

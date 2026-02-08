@@ -39,6 +39,9 @@ type RecommendationItem struct {
 func (s *RecommendationService) GetPersonalizedRecommendations(userID string, limit int) ([]RecommendationItem, error) {
 	ctx := context.Background()
 
+	if s.GraphService == nil {
+		return nil, fmt.Errorf("graph service is not initialized")
+	}
 	// 1. 获取用户当前的技能掌握情况
 	masteries, err := s.GraphService.GetUserMastery(ctx, userID)
 	if err != nil {

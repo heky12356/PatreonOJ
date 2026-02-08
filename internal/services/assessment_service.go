@@ -25,6 +25,14 @@ func NewAssessmentService(db *gorm.DB, graphService *graph.QuestionGraphService)
 	}
 }
 
+// normalizeSkillKey 标准化技能键（小写、去空格、替换全角空格）
+func normalizeSkillKey(name string) string {
+	name = strings.TrimSpace(name)
+	name = strings.ReplaceAll(name, "　", " ")
+	name = strings.Join(strings.Fields(name), " ")
+	return strings.ToLower(name)
+}
+
 // UpdateUserMasteryBasedOnResult 根据用户做题结果更新技能掌握度
 func (s *AssessmentService) UpdateUserMasteryBasedOnResult(userId string, questionId int, isCorrect bool) error {
 	// 1. 获取题目信息（包括难度和关联技能）
@@ -44,6 +52,10 @@ func (s *AssessmentService) UpdateUserMasteryBasedOnResult(userId string, questi
 
 	// 2. 对于每个技能，计算新的掌握度
 	for _, skillKey := range skills {
+		skillKey = normalizeSkillKey(skillKey)
+		if skillKey == "" {
+			continue
+		}
 		// 获取当前掌握度
 		currentMastery, err := s.getCurrentMastery(userId, skillKey)
 		if err != nil {
@@ -113,6 +125,9 @@ func (s *AssessmentService) updateMastery(ctx context.Context, userId string, sk
 	}
 
 	// 更新图
+	if s.GraphService == nil {
+		return nil
+	}
 	return s.GraphService.UpdateUserMastery(ctx, userId, skillKey, mastery)
 }
 

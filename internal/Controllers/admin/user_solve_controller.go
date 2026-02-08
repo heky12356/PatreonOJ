@@ -1,7 +1,6 @@
 package admin
 
 import (
-	"errors"
 	"net/http"
 	"strings"
 
@@ -26,13 +25,13 @@ func NewUserSolveController(db *gorm.DB) *UserSolveController {
 func (uc *UserSolveController) Index(c *gin.Context) {
 	var userSolve models.UserSolve
 	userID := c.Param("uuid")
-	if err := uc.db.Where("uuid = ?", userID).Find(&userSolve).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			c.JSON(http.StatusOK, []string{})
-			return
-		}
-
+	result := uc.db.Where("uuid = ?", userID).First(&userSolve)
+	if result.Error != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询用户解题列表失败"})
+		return
+	}
+	if result.RowsAffected == 0 {
+		c.JSON(http.StatusOK, []string{})
 		return
 	}
 	// 转换 ProblemIDs 为字符串数组
@@ -52,7 +51,7 @@ func (uc *UserSolveController) Show(c *gin.Context) {
 	}
 
 	var userSolve models.UserSolve
-	if err := models.DB.Where("uuid = ?", UUID).First(&userSolve).Error; err != nil {
+	if err := uc.db.Where("uuid = ?", UUID).First(&userSolve).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "用户解题不存在"})
 		return
 	}
