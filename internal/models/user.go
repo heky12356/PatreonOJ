@@ -49,45 +49,6 @@ type Permission struct {
 	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
-// UserQuestionMastery 用户题目掌握模型
-type UserQuestionMastery struct {
-	ID             uint   `gorm:"primaryKey;autoIncrement" json:"id"`
-	UserUUID       string `gorm:"size:36;not null;index:idx_user_question,unique" json:"user_uuid"`
-	QuestionNumber int    `gorm:"not null;index:idx_user_question,unique;index" json:"question_number"`
-	QuestionId     string `gorm:"size:36;index" json:"question_id"`
-
-	// 统计信息
-	Attempts      int     `gorm:"not null;default:0" json:"attempts"`       // 总提交次数
-	AcceptedCount int     `gorm:"not null;default:0" json:"accepted_count"` // 已AC次数
-	Mastery       float64 `gorm:"not null;default:0" json:"mastery"`        // 掌握度，0-1之间的浮点数
-
-	// 最后提交时间
-	LastSubmittedAt *time.Time `json:"last_submitted_at"`
-	LastAcceptedAt  *time.Time `json:"last_accepted_at"`
-
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-}
-
-// UserTagMastery 用户标签掌握模型
-type UserTagMastery struct {
-	ID       uint   `gorm:"primaryKey;autoIncrement" json:"id"`
-	UserUUID string `gorm:"size:36;not null;index:idx_user_tag,unique" json:"user_uuid"`
-	Tag      string `gorm:"type:varchar(128);not null;index:idx_user_tag,unique;index" json:"tag"`
-
-	// 统计信息
-	Attempts      int     `gorm:"not null;default:0" json:"attempts"`       // 总提交次数
-	AcceptedCount int     `gorm:"not null;default:0" json:"accepted_count"` // 已AC次数
-	Mastery       float64 `gorm:"not null;default:0" json:"mastery"`        // 掌握度，0-1之间的浮点数
-
-	// 最后提交时间
-	LastSubmittedAt *time.Time `json:"last_submitted_at"`
-	LastAcceptedAt  *time.Time `json:"last_accepted_at"`
-
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-}
-
 func (User) TableName() string {
 	return "user"
 }

@@ -122,20 +122,6 @@ func parseResults(resultsStr string) []models.TestCaseResult {
 	return results
 }
 
-// serializeResults 将TestCaseResult数组序列化为JSON字符串
-func serializeResults(results []models.TestCaseResult) string {
-	if len(results) == 0 {
-		return ""
-	}
-
-	data, err := json.Marshal(results)
-	if err != nil {
-		log.Printf("序列化评测结果失败: %v", err)
-		return ""
-	}
-	return string(data)
-}
-
 // consumeSubmissions 消费者函数，处理消息队列中的提交信息
 func (sc *SubmissionController) consumeSubmissions() {
 	for submission := range sc.submissionQueue {
@@ -174,8 +160,9 @@ func (sc *SubmissionController) consumeSubmissions() {
 		log.Printf("allcurrent: %v", allcurrent)
 
 		var question models.Question
-		if err := sc.db.Where("id = ?", submission.QuestionID).First(&question).Error; err == nil {
-			_ = sc.recordMastery(submission.UserID, question, allcurrent, time.Now())
+		if err := sc.db.Where("id = ?", submission.QuestionID).First(&question).Error; err != nil {
+			log.Printf("查询题目失败 - 题目ID: %d, 错误: %v", submission.QuestionID, err)
+			continue
 		}
 
 		if !allcurrent {
@@ -220,76 +207,6 @@ func (sc *SubmissionController) consumeSubmissions() {
 			log.Printf("更新用户解题记录失败 - 用户ID: %s, 错误: %v", usersolve.UUID, err)
 		}
 	}
-}
-
-// recordMastery 记录用户对题目和标签的掌握度
-func (sc *SubmissionController) recordMastery(userUUID string, question models.Question, accepted bool, now time.Time) error {
-	if userUUID == "" || question.QuestionNumber == 0 {
-		return nil
-	}
-	if err := sc.upsertQuestionMastery(userUUID, question.QuestionNumber, question.QuestionId, accepted, now); err != nil {
-		return err
-	}
-	for _, tag := range splitTags(question.Tags) {
-		_ = sc.upsertTagMastery(userUUID, tag, accepted, now)
-	}
-	return nil
-}
-
-// upsertQuestionMastery 更新或插入用户对题目掌握度
-func (sc *SubmissionController) upsertQuestionMastery(userUUID string, questionNumber int, questionID string, accepted bool, now time.Time) error {
-	var m models.UserQuestionMastery
-	err := sc.db.Where("user_uuid = ? AND question_number = ?", userUUID, questionNumber).First(&m).Error
-	if err != nil {
-		if err != gorm.ErrRecordNotFound {
-			return err
-		}
-		m = models.UserQuestionMastery{UserUUID: userUUID, QuestionNumber: questionNumber}
-	}
-	if len(questionID) > 36 {
-		questionID = questionID[:36]
-	}
-	if questionID == "" {
-		questionID = strconv.Itoa(questionNumber)
-	}
-	if m.QuestionId != questionID {
-		m.QuestionId = questionID
-	}
-	m.Attempts++
-	m.LastSubmittedAt = &now
-	if accepted {
-		m.AcceptedCount++
-		m.LastAcceptedAt = &now
-	}
-	if m.Attempts > 0 {
-		m.Mastery = float64(m.AcceptedCount) / float64(m.Attempts)
-	}
-	return sc.db.Save(&m).Error
-}
-
-// upsertTagMastery 更新或插入用户对标签的掌握度
-func (sc *SubmissionController) upsertTagMastery(userUUID string, tag string, accepted bool, now time.Time) error {
-	if tag == "" {
-		return nil
-	}
-	var m models.UserTagMastery
-	err := sc.db.Where("user_uuid = ? AND tag = ?", userUUID, tag).First(&m).Error
-	if err != nil {
-		if err != gorm.ErrRecordNotFound {
-			return err
-		}
-		m = models.UserTagMastery{UserUUID: userUUID, Tag: tag}
-	}
-	m.Attempts++
-	m.LastSubmittedAt = &now
-	if accepted {
-		m.AcceptedCount++
-		m.LastAcceptedAt = &now
-	}
-	if m.Attempts > 0 {
-		m.Mastery = float64(m.AcceptedCount) / float64(m.Attempts)
-	}
-	return sc.db.Save(&m).Error
 }
 
 // SubmitCode 提交代码

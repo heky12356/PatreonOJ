@@ -20,7 +20,6 @@ func RoutersInit(r *gin.Engine, ossClient *oss.OSS, graphService *graph.Question
 	userCtrl := admin.NewUserController(models.DB)
 	authCtrl := admin.NewAuthController(models.DB)
 	submissionCtrl := admin.NewSubmissionController(models.DB, ossClient, graphService)
-	masteryCtrl := admin.NewMasteryController(models.DB)
 	statsCtrl := admin.NewStatsController(graphService)
 
 	// 初始化业务服务
@@ -41,11 +40,6 @@ func RoutersInit(r *gin.Engine, ossClient *oss.OSS, graphService *graph.Question
 
 		userRouter.GET("/:uuid", userCtrl.Show)
 		userRouter.PUT("/:uuid", userCtrl.Update)
-		userRouter.GET("/:uuid/mastery/questions", masteryCtrl.ListQuestionMastery)
-		userRouter.GET("/:uuid/mastery/tags", masteryCtrl.ListTagMastery)
-		userRouter.POST("/:uuid/mastery/events", masteryCtrl.SubmitMasteryEvent)
-		userRouter.DELETE("/:uuid/mastery/questions/:number", masteryCtrl.DeleteQuestionMastery)
-		userRouter.DELETE("/:uuid/mastery/tags", masteryCtrl.DeleteTagMastery)
 	}
 
 	apiV1Router := r.Group("/api/v1")

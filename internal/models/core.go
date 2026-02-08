@@ -92,8 +92,6 @@ func AutoMigrate() error {
 		&User{},
 		&Role{},
 		&Permission{},
-		&UserQuestionMastery{},
-		&UserTagMastery{},
 		&Question{},
 		&Category{},
 		&Submission{},

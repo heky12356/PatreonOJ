@@ -41,17 +41,3 @@ func requireOperatorUUID(db *gorm.DB, c *gin.Context) (string, bool) {
 	}
 	return op, true
 }
-
-// splitTags 分割标签字符串，处理逗号和中文逗号
-func splitTags(tags string) []string {
-	tags = strings.ReplaceAll(tags, "，", ",")
-	parts := strings.Split(tags, ",")
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p != "" {
-			out = append(out, p)
-		}
-	}
-	return out
-}
