@@ -1338,8 +1338,9 @@ func (s *QuestionGraphService) RecommendQuestionsBySkills(ctx context.Context, u
 			WHERE s.key IN $skills
 			  AND q.status = 'published'
 			  AND NOT (u)-[:SOLVED]->(q)  // 排除已做过的 (需确保有 SOLVED 关系，或者忽略)
-			WITH q, s, rand() as random
+			WITH q, collect(DISTINCT s) AS matchedSkills, rand() AS random
 			ORDER BY random
+			WITH q, matchedSkills[0] AS s
 			RETURN q.question_number as question_number,
 				   coalesce(q.question_id, '') as question_id,
 				   q.title as title,
@@ -1354,8 +1355,10 @@ func (s *QuestionGraphService) RecommendQuestionsBySkills(ctx context.Context, u
 		// 备选策略：推荐任意未做的简单/中等题
 		query = `
 			MATCH (q:Question)
+			OPTIONAL MATCH (u:User {user_id: $user_id})
 			WHERE q.status = 'published'
 			  AND q.difficulty IN ['Simple', 'Easy', 'Medium', '简单', '中等']
+			  AND (u IS NULL OR NOT EXISTS { MATCH (u)-[:SOLVED]->(q) })
 			WITH q, rand() as random
 			ORDER BY random
 			RETURN q.question_number as question_number,

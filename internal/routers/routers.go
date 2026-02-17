@@ -23,8 +23,7 @@ func RoutersInit(r *gin.Engine, ossClient *oss.OSS, graphService *graph.Question
 	statsCtrl := admin.NewStatsController(graphService)
 
 	// 初始化业务服务
-	assessmentService := services.NewAssessmentService(models.DB, graphService)
-	recommendationService := services.NewRecommendationService(models.DB, graphService, assessmentService)
+	recommendationService := services.NewRecommendationService(models.DB, graphService)
 	aiService := services.NewAIService(config.GlobalConfig.AI)
 
 	// 用户相关路由

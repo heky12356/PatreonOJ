@@ -6,7 +6,6 @@ import (
 	"log"
 	"math"
 	"net/http"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -20,6 +19,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // SubmissionController 处理代码提交相关的请求
@@ -177,24 +177,6 @@ func (sc *SubmissionController) consumeSubmissions() {
 			_ = sc.db.Where("id = ?", submission.QuestionID).First(&question)
 		}
 
-		var usersolve models.UserSolve
-		if err := sc.db.Where("uuid = ?", submission.UserID).First(&usersolve).Error; err != nil {
-			if err == gorm.ErrRecordNotFound {
-				usersolve.UUID = submission.UserID
-				usersolve.ProblemIDs = strconv.Itoa(question.QuestionNumber)
-				if err := sc.db.Create(&usersolve).Error; err != nil {
-					log.Printf("创建用户解题记录失败 - 用户ID: %s, 错误: %v", submission.UserID, err)
-					continue
-				}
-			} else {
-				log.Printf("查询用户失败 - 用户ID: %s, 错误: %v", submission.UserID, err)
-				continue
-			}
-		}
-
-		qid := strconv.Itoa(question.QuestionNumber)
-		log.Printf("usersolve.ProblemIDs: %s", usersolve.ProblemIDs)
-
 		// 写入图谱 SOLVED 边
 		if sc.graphService != nil {
 			if err := sc.graphService.MarkUserSolvedQuestion(context.Background(), submission.UserID, question.QuestionNumber); err != nil {
@@ -202,24 +184,18 @@ func (sc *SubmissionController) consumeSubmissions() {
 			}
 		}
 
-		// 去重
-		acSet := strings.Split(usersolve.ProblemIDs, ",")
-		if slices.Contains(acSet, qid) {
-			log.Printf("用户已解题: %s", qid)
-			continue
-		}
-
-		log.Printf("qid: %s", qid)
-
-		if usersolve.ProblemIDs == "" {
-			usersolve.ProblemIDs = qid
-		} else {
-			usersolve.ProblemIDs += "," + qid
-		}
-
 		// 更新用户解题记录
-		if err := sc.db.Model(&usersolve).Update("problem_ids", usersolve.ProblemIDs).Error; err != nil {
-			log.Printf("更新用户解题记录失败 - 用户ID: %s, 错误: %v", usersolve.UUID, err)
+		rec := models.UserSolvedQuestion{
+			UserUUID:   submission.UserID,
+			QuestionID: submission.QuestionID,
+			SolvedAt:   time.Now(),
+		}
+
+		if err := sc.db.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "user_uuid"}, {Name: "question_id"}},
+			DoNothing: true, // 或 DoUpdates 更新 solved_at
+		}).Create(&rec).Error; err != nil {
+			log.Printf("创建用户解题记录失败 - 用户ID: %s, 题目ID: %d, 错误: %v", rec.UserUUID, rec.QuestionID, err)
 		}
 	}
 }

@@ -11,17 +11,15 @@ import (
 
 // RecommendationService 个性化推荐服务
 type RecommendationService struct {
-	DB                *gorm.DB
-	GraphService      *graph.QuestionGraphService
-	AssessmentService *AssessmentService
+	DB           *gorm.DB
+	GraphService *graph.QuestionGraphService
 }
 
 // NewRecommendationService 创建推荐服务
-func NewRecommendationService(db *gorm.DB, graphService *graph.QuestionGraphService, assessmentService *AssessmentService) *RecommendationService {
+func NewRecommendationService(db *gorm.DB, graphService *graph.QuestionGraphService) *RecommendationService {
 	return &RecommendationService{
-		DB:                db,
-		GraphService:      graphService,
-		AssessmentService: assessmentService,
+		DB:           db,
+		GraphService: graphService,
 	}
 }
 

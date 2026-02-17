@@ -99,8 +99,7 @@ func AutoMigrate() error {
 		&Relation{},
 		&Node{},
 		&QuestionCategory{},
-
-		&UserSolve{},
+		&UserSolvedQuestion{},
 		&UserSkillMastery{},
 		&OjOverView{},
 		// 如果有其他模型，在这里添加
