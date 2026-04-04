@@ -1,7 +1,6 @@
 package admin
 
 import (
-	"net/http"
 	"strings"
 
 	"dachuang/internal/models"
@@ -26,17 +25,17 @@ func requireOperatorUUID(db *gorm.DB, c *gin.Context) (string, bool) {
 		op = strings.TrimSpace(c.Query("operator_uuid"))
 	}
 	if op == "" {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "未登录"})
+		apiError(c, 401, "未登录")
 		return "", false
 	}
 
 	var user models.User
 	if err := db.Where("uuid = ?", op).First(&user).Error; err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "无效的登录状态"})
+		apiError(c, 401, "无效的登录状态")
 		return "", false
 	}
 	if user.Status != "" && user.Status != "active" {
-		c.JSON(http.StatusForbidden, gin.H{"error": "用户已被禁用"})
+		apiError(c, 403, "用户已被禁用")
 		return "", false
 	}
 	return op, true

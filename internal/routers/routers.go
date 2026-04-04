@@ -72,7 +72,7 @@ func RoutersInit(r *gin.Engine, ossClient *oss.OSS, graphService *graph.Question
 	// 分类相关路由
 	categoryRouter := r.Group("/category")
 	{
-		categoryCtrl := &admin.CategoryController{}
+		categoryCtrl := admin.NewCategoryController(models.DB)
 		categoryRouter.GET("/", categoryCtrl.Index)
 		categoryRouter.POST("/", categoryCtrl.Store)
 		categoryRouter.POST("/:id", categoryCtrl.Update)
@@ -82,14 +82,14 @@ func RoutersInit(r *gin.Engine, ossClient *oss.OSS, graphService *graph.Question
 	// 关系相关路由
 	relationRouter := r.Group("/relation")
 	{
-		relationCtrl := &admin.RelationController{}
+		relationCtrl := admin.NewRelationController(models.DB)
 		relationRouter.GET("/", relationCtrl.Index)
 	}
 
 	// 节点相关路由
 	nodeRouter := r.Group("/node")
 	{
-		nodeCtrl := &admin.NodeController{}
+		nodeCtrl := admin.NewNodeController(models.DB)
 		nodeRouter.GET("/", nodeCtrl.Index)
 	}
 
@@ -103,7 +103,7 @@ func RoutersInit(r *gin.Engine, ossClient *oss.OSS, graphService *graph.Question
 	// 测试用例相关路由
 	testCaseRouter := r.Group("/testcase")
 	{
-		testCaseCtrl := admin.NewTestCaseController(ossClient)
+		testCaseCtrl := admin.NewTestCaseController(models.DB, ossClient)
 		testCaseRouter.GET("/", testCaseCtrl.Index)                         // 获取测试用例列表
 		testCaseRouter.GET("/question/:number", testCaseCtrl.GetByQuestion) // 根据题目编号获取测试用例
 		testCaseRouter.GET("/:id", testCaseCtrl.Show)                       // 获取单个测试用例详情

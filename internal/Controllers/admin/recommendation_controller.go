@@ -2,7 +2,6 @@ package admin
 
 import (
 	"net/http"
-	"strconv"
 
 	"dachuang/internal/services"
 
@@ -25,14 +24,14 @@ func (c *RecommendationController) GetRecommendations(ctx *gin.Context) {
 	userUUID := ctx.Query("uuid")
 
 	if userUUID == "" {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID format"})
+		apiError(ctx, http.StatusBadRequest, "Invalid user ID format")
 		return
 	}
 
-	limitStr := ctx.DefaultQuery("limit", "10")
-	limit, err := strconv.Atoi(limitStr)
-	if err != nil || limit <= 0 {
-		limit = 10
+	limit, err := parsePositiveIntQuery(ctx, "limit", 10)
+	if err != nil {
+		apiError(ctx, http.StatusBadRequest, err.Error())
+		return
 	}
 	if limit > 50 {
 		limit = 50
@@ -40,12 +39,9 @@ func (c *RecommendationController) GetRecommendations(ctx *gin.Context) {
 
 	recommendations, err := c.RecommendationService.GetPersonalizedRecommendations(userUUID, limit)
 	if err != nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		apiError(ctx, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	ctx.JSON(http.StatusOK, gin.H{
-		"code": 200,
-		"data": recommendations,
-	})
+	apiOK(ctx, http.StatusOK, "ok", gin.H{"data": recommendations})
 }
