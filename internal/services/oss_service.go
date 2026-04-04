@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"dachuang/internal/oss"
+	"patreonoj/internal/oss"
 
 	"github.com/google/uuid"
 	"github.com/minio/minio-go/v7"

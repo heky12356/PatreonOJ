@@ -9,12 +9,12 @@ import (
 	"strings"
 	"time"
 
-	"dachuang/internal/config"
-	"dachuang/internal/graph"
-	"dachuang/internal/models"
-	"dachuang/internal/oss"
-	"dachuang/internal/services"
-	"dachuang/internal/util"
+	"patreonoj/internal/config"
+	"patreonoj/internal/graph"
+	"patreonoj/internal/models"
+	"patreonoj/internal/oss"
+	"patreonoj/internal/services"
+	"patreonoj/internal/util"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"

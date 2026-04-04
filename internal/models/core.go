@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"dachuang/internal/config"
+	"patreonoj/internal/config"
 
 	"gorm.io/driver/mysql"
 	"gorm.io/driver/sqlite"

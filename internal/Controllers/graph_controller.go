@@ -1,10 +1,10 @@
-package Controllers
+package controllers
 
 import (
 	"context"
 
-	"dachuang/internal/graph"
-	"dachuang/internal/services"
+	"patreonoj/internal/graph"
+	"patreonoj/internal/services"
 	"gorm.io/gorm"
 )
 

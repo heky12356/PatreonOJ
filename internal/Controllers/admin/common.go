@@ -3,8 +3,8 @@ package admin
 import (
 	"strings"
 
-	"dachuang/internal/models"
-	"dachuang/internal/util"
+	"patreonoj/internal/models"
+	"patreonoj/internal/util"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"

@@ -3,7 +3,7 @@ package util
 import (
 	"strings"
 
-	"dachuang/internal/models"
+	"patreonoj/internal/models"
 )
 
 type User struct {

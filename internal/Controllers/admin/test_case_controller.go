@@ -6,9 +6,9 @@ import (
 	"net/http"
 	"strconv"
 
-	"dachuang/internal/config"
-	"dachuang/internal/oss"
-	"dachuang/internal/services"
+	"patreonoj/internal/config"
+	"patreonoj/internal/oss"
+	"patreonoj/internal/services"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"

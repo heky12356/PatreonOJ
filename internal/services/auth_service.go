@@ -6,7 +6,7 @@ import (
 	"errors"
 	"strings"
 
-	"dachuang/internal/models"
+	"patreonoj/internal/models"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"

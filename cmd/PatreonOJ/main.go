@@ -6,11 +6,11 @@ import (
 	"log"
 	"time"
 
-	"dachuang/internal/config"
-	"dachuang/internal/graph"
-	"dachuang/internal/models"
-	"dachuang/internal/oss"
-	"dachuang/internal/routers"
+	"patreonoj/internal/config"
+	"patreonoj/internal/graph"
+	"patreonoj/internal/models"
+	"patreonoj/internal/oss"
+	"patreonoj/internal/routers"
 
 	"github.com/gin-gonic/gin"
 )

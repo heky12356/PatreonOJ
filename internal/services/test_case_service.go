@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	"dachuang/internal/models"
+	"patreonoj/internal/models"
 
 	"github.com/minio/minio-go/v7"
 	"gorm.io/gorm"

@@ -1,4 +1,4 @@
-package Controllers
+package controllers
 
 import (
 	"context"
@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"strconv"
 
-	"dachuang/internal/services"
+	"patreonoj/internal/services"
 
 	"github.com/gin-gonic/gin"
 )

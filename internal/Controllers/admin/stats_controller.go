@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"strings"
 
-	"dachuang/internal/graph"
-	"dachuang/internal/services"
+	"patreonoj/internal/graph"
+	"patreonoj/internal/services"
 
 	"github.com/gin-gonic/gin"
 )

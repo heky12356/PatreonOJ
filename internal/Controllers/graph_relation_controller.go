@@ -1,12 +1,12 @@
-package Controllers
+package controllers
 
 import (
 	"context"
 	"errors"
 	"net/http"
 
-	"dachuang/internal/graph"
-	"dachuang/internal/services"
+	"patreonoj/internal/graph"
+	"patreonoj/internal/services"
 
 	"github.com/gin-gonic/gin"
 )

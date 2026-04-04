@@ -14,10 +14,10 @@ import (
 	"strings"
 	"time"
 
-	"dachuang/internal/config"
-	"dachuang/internal/graph"
-	"dachuang/internal/models"
-	"dachuang/internal/oss"
+	"patreonoj/internal/config"
+	"patreonoj/internal/graph"
+	"patreonoj/internal/models"
+	"patreonoj/internal/oss"
 
 	"gorm.io/gorm"
 )

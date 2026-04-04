@@ -5,7 +5,7 @@ import (
 	"errors"
 	"sort"
 
-	"dachuang/internal/graph"
+	"patreonoj/internal/graph"
 )
 
 var ErrStatsGraphUnavailable = errors.New("graph service is not initialized")

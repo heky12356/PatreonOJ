@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	"dachuang/internal/graph"
-	"dachuang/internal/models"
+	"patreonoj/internal/graph"
+	"patreonoj/internal/models"
 
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"

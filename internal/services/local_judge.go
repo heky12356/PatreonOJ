@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"dachuang/internal/config"
-	"dachuang/internal/models"
+	"patreonoj/internal/config"
+	"patreonoj/internal/models"
 )
 
 // LocalJudgeService 本地评测服务

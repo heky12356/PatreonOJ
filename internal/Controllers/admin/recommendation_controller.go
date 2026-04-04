@@ -3,7 +3,7 @@ package admin
 import (
 	"net/http"
 
-	"dachuang/internal/services"
+	"patreonoj/internal/services"
 
 	"github.com/gin-gonic/gin"
 )

@@ -4,13 +4,13 @@ import (
 	"context"
 	"log"
 
-	"dachuang/internal/Controllers"
-	"dachuang/internal/Controllers/admin"
-	"dachuang/internal/config"
-	"dachuang/internal/graph"
-	"dachuang/internal/models"
-	"dachuang/internal/oss"
-	"dachuang/internal/services"
+	controllers "patreonoj/internal/controllers"
+	"patreonoj/internal/controllers/admin"
+	"patreonoj/internal/config"
+	"patreonoj/internal/graph"
+	"patreonoj/internal/models"
+	"patreonoj/internal/oss"
+	"patreonoj/internal/services"
 
 	"github.com/gin-gonic/gin"
 )
@@ -121,7 +121,7 @@ func RoutersInit(r *gin.Engine, ossClient *oss.OSS, graphService *graph.Question
 			if err := graphService.InitGraph(context.Background(), models.DB); err != nil {
 				log.Printf("Warning: Failed to init graph: %v", err)
 			}
-			graphCtrl := Controllers.NewGraphController(models.DB, graphService, aiService)
+			graphCtrl := controllers.NewGraphController(models.DB, graphService, aiService)
 			// 获取所有题目节点
 			graphRouter.GET("/node", graphCtrl.ListQuestions)
 
@@ -149,7 +149,7 @@ func RoutersInit(r *gin.Engine, ossClient *oss.OSS, graphService *graph.Question
 	// OJ首页相关路由
 	ojOverViewRouter := r.Group("/overview")
 	{
-		ojOverViewCtrl := Controllers.NewOjOverViewController(models.DB)
+		ojOverViewCtrl := controllers.NewOjOverViewController(models.DB)
 		ojOverViewRouter.GET("/getHomeText", ojOverViewCtrl.GetHomeText)
 		ojOverViewRouter.POST("/updateHomeText", ojOverViewCtrl.UpdateHomeText)
 		ojOverViewRouter.GET("/getAnnouncement", ojOverViewCtrl.GetAnnouncement)

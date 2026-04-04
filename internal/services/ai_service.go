@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"dachuang/internal/config"
+	"patreonoj/internal/config"
 )
 
 // AIService AI服务

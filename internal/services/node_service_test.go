@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"dachuang/internal/models"
+	"patreonoj/internal/models"
 
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"

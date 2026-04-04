@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"dachuang/internal/oss"
+	"patreonoj/internal/oss"
 
 	"github.com/minio/minio-go/v7"
 )
