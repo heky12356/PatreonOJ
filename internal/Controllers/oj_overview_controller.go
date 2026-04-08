@@ -3,19 +3,19 @@ package controllers
 import (
 	"net/http"
 
-	"patreonoj/internal/services"
+	overviewsvc "patreonoj/internal/services/overview"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
 
 type OjOverViewController struct {
-	overviewService *services.OverviewService
+	overviewService *overviewsvc.OverviewService
 }
 
 func NewOjOverViewController(db *gorm.DB) *OjOverViewController {
 	return &OjOverViewController{
-		overviewService: services.NewOverviewService(db),
+		overviewService: overviewsvc.NewOverviewService(db),
 	}
 }
 

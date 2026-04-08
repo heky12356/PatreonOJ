@@ -15,12 +15,6 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// UserInfo 结构体定义（当前未使用）
-type UserInfo struct {
-	Username string `json:"username" form:"username"`
-	Password string `json:"password" form:"password"`
-}
-
 // UnixToTime 将Unix时间戳转换为格式化的时间字符串
 func UnixToTime(timestamp int64) string {
 	return time.Unix(timestamp, 0).Format("2006-01-02 15:04:05")
@@ -95,6 +89,11 @@ func main() {
 			log.Printf("图数据库服务初始化成功: %s", config.GlobalConfig.GraphDatabase.Neo4j.URI)
 		}
 	}
+	if graphService != nil {
+		if err := graphService.InitGraph(context.Background(), models.DB); err != nil {
+			log.Printf("warning: failed to init graph: %v", err)
+		}
+	}
 
 	// 设置Gin运行模式
 	gin.SetMode(config.GlobalConfig.Server.Mode)
@@ -108,7 +107,7 @@ func main() {
 	})
 
 	// 初始化路由
-	routers.RoutersInit(r, ossClient, graphService)
+	routers.RoutersInit(r, ossClient)
 
 	// 启动服务器
 	serverAddr := config.GlobalConfig.GetServerAddr()

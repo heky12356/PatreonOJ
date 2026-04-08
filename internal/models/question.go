@@ -1,40 +1,32 @@
 package models
 
 type Question struct {
-	// 数据库主键ID（自增）
 	Id int `gorm:"primaryKey;autoIncrement" json:"id"`
 
-	// 题目编号（从1001开始，用于显示）
-	QuestionNumber int `gorm:"unique;not null" json:"question_number"`
+	QuestionId string `gorm:"type:varchar(64);not null" json:"question_id"`
 
-	// 题目id（自定义）
-	QuestionId string `gorm:"type:text" json:"question_id"`
+	Title      string `gorm:"not null" json:"title"`
+	Content    string `gorm:"type:text" json:"content"`
+	Difficulty string `json:"difficulty"`
 
-	// 基础信息
-	Title      string `gorm:"not null" json:"title"`    // 题目标题
-	Content    string `gorm:"type:text" json:"content"` // 题目描述
-	Difficulty string `json:"difficulty"`               // 难度等级
+	TimeLimit   int `gorm:"default:2000" json:"time_limit"`
+	MemoryLimit int `gorm:"default:256" json:"memory_limit"`
 
-	// 约束条件
-	DataRange   string `gorm:"type:text" json:"data_range"`     // 数据范围
-	TimeLimit   int    `gorm:"default:2000" json:"time_limit"`  // 时间限制（毫秒）
-	MemoryLimit int    `gorm:"default:256" json:"memory_limit"` // 内存限制（MB）
+	// Tags keeps comma-separated tags for compatibility with existing logic.
+	Tags string `json:"tags"`
 
-	// 元数据
-	Tags string `json:"tags"` // 题目标签（逗号分隔）
+	// Optional normalized tag relation.
+	TagID int   `json:"tag_id"`
+	Tag   []Tag `gorm:"many2many:question_tag;" json:"tag"`
 
-	// 分类关联
-	Category_id int
-	Category    []Category `gorm:"many2many:question_category;"`
-
-	// 状态信息
-	Status string `gorm:"default:draft" json:"status"` // 题目状态：draft/published/archived/hidden
+	Status string `gorm:"default:draft" json:"status"`
 }
+
 type TestCase struct {
 	ID         uint `gorm:"primaryKey"`
-	QuestionID int  `json:"question_id" gorm:"index"` // 改为int类型，与Question.Id匹配
+	QuestionID int  `json:"question_id" gorm:"index"`
 
-	// 兼容旧的小文本存储（可选）
+	// Backward-compatible inline testcase fields.
 	Input          string `gorm:"type:text" json:"input"`
 	ExpectedOutput string `gorm:"type:text" json:"expected_output"`
 

@@ -323,7 +323,7 @@ func (s *QuestionGraphService) ListRelations(ctx context.Context) ([]QuestionRel
 		ORDER BY from_question_number, to_question_number, relation_type
 	`
 
-	types := []string{string(PREREQUISITE), string(NEXT_LEVEL), string(SIMILAR), string(CATEGORY), string(TAG_SIMILAR)}
+	types := []string{string(PREREQUISITE), string(NEXT_LEVEL), string(SIMILAR), string(TAG_SIMILAR)}
 	params := map[string]interface{}{"types": types}
 
 	result, err := s.client.ExecuteRead(ctx, func(tx neo4j.ManagedTransaction) (interface{}, error) {
@@ -782,7 +782,7 @@ func (s *QuestionGraphService) GetRecommendations(ctx context.Context, questionN
 // InitGraph 初始化图数据库，确保所有题目节点和关系都存在
 func (s *QuestionGraphService) InitGraph(ctx context.Context, db *gorm.DB) error {
 	var questions []models.Question
-	if err := db.Order("question_number ASC").Find(&questions).Error; err != nil {
+	if err := db.Order("id ASC").Find(&questions).Error; err != nil {
 		return fmt.Errorf("读取题目列表失败: %w", err)
 	}
 
@@ -793,7 +793,7 @@ func (s *QuestionGraphService) InitGraph(ctx context.Context, db *gorm.DB) error
 
 	dbQuestionMap := make(map[int]models.Question, len(questions))
 	for _, q := range questions {
-		dbQuestionMap[q.QuestionNumber] = q
+		dbQuestionMap[q.Id] = q
 	}
 
 	graphQuestionMap := make(map[int]QuestionNode, len(graphQuestions))
@@ -804,7 +804,7 @@ func (s *QuestionGraphService) InitGraph(ctx context.Context, db *gorm.DB) error
 	now := time.Now().UTC()
 	for _, q := range questions {
 		desired := QuestionNode{
-			QuestionNumber: q.QuestionNumber,
+			QuestionNumber: q.Id,
 			QuestionId:     q.QuestionId,
 			Title:          q.Title,
 			Difficulty:     q.Difficulty,
@@ -814,13 +814,13 @@ func (s *QuestionGraphService) InitGraph(ctx context.Context, db *gorm.DB) error
 			UpdatedAt:      now,
 		}
 
-		existing, ok := graphQuestionMap[q.QuestionNumber]
+		existing, ok := graphQuestionMap[q.Id]
 		if ok && sameQuestionNode(existing, desired) {
 			continue
 		}
 
 		if err := s.CreateOrUpdateQuestion(ctx, desired); err != nil {
-			return fmt.Errorf("同步题目节点失败(question_number=%d): %w", q.QuestionNumber, err)
+			return fmt.Errorf("sync question node failed(question_id=%s): %w", q.QuestionId, err)
 		}
 	}
 
@@ -833,7 +833,7 @@ func (s *QuestionGraphService) InitGraph(ctx context.Context, db *gorm.DB) error
 		}
 	}
 
-	var dbRelations []models.Relation
+	var dbRelations []models.QuestionRelationEdge
 	if err := db.Find(&dbRelations).Error; err != nil {
 		return fmt.Errorf("读取关系表失败: %w", err)
 	}
@@ -842,29 +842,42 @@ func (s *QuestionGraphService) InitGraph(ctx context.Context, db *gorm.DB) error
 		PREREQUISITE: true,
 		NEXT_LEVEL:   true,
 		SIMILAR:      true,
-		CATEGORY:     true,
+	}
+
+	questionNumberByID := make(map[string]int, len(dbQuestionMap))
+	for _, q := range dbQuestionMap {
+		questionNumberByID[q.QuestionId] = q.Id
 	}
 
 	dbRelationMap := make(map[string]QuestionRelation, len(dbRelations))
 	for _, r := range dbRelations {
-		relType := RelationshipType(r.Relation)
+		relType, ok := mapEdgeTypeToRelationshipType(r.EdgeType)
+		if !ok {
+			continue
+		}
 		if !validTypes[relType] {
 			continue
 		}
-		if _, ok := dbQuestionMap[r.SourceID]; !ok {
+
+		fromNumber, ok := questionNumberByID[r.FromQuestionID]
+		if !ok {
 			continue
 		}
-		if _, ok := dbQuestionMap[r.TargetID]; !ok {
+		toNumber, ok := questionNumberByID[r.ToQuestionID]
+		if !ok {
 			continue
 		}
 
 		rel := QuestionRelation{
-			FromQuestionNumber: r.SourceID,
-			ToQuestionNumber:   r.TargetID,
+			FromQuestionNumber: fromNumber,
+			ToQuestionNumber:   toNumber,
 			RelationType:       relType,
 			Weight:             1,
 			Description:        "",
-			CreatedAt:          now,
+			CreatedAt:          r.CreatedAt,
+		}
+		if rel.CreatedAt.IsZero() {
+			rel.CreatedAt = now
 		}
 		dbRelationMap[relationKey(rel.FromQuestionNumber, rel.ToQuestionNumber, rel.RelationType)] = rel
 	}
@@ -925,6 +938,19 @@ func sameQuestionNode(a, b QuestionNode) bool {
 // relationKey 生成关系键，用于唯一标识关系
 func relationKey(from, to int, relationType RelationshipType) string {
 	return fmt.Sprintf("%d->%d:%s", from, to, relationType)
+}
+
+func mapEdgeTypeToRelationshipType(edgeType models.QuestionRelationEdgeType) (RelationshipType, bool) {
+	switch edgeType {
+	case models.QuestionRelationEdgeTypePrerequisite:
+		return PREREQUISITE, true
+	case models.QuestionRelationEdgeTypeNextLevel:
+		return NEXT_LEVEL, true
+	case models.QuestionRelationEdgeTypeSimilar:
+		return SIMILAR, true
+	default:
+		return "", false
+	}
 }
 
 // SkillNode 技能/标签节点
@@ -1119,12 +1145,12 @@ func (s *QuestionGraphService) SyncSkills(ctx context.Context, questions []model
 	skillsByKey := map[string]SkillNode{}
 	questionSkills := make([]map[string]interface{}, 0, len(questions))
 	for _, q := range questions {
-		if q.QuestionNumber == 0 {
+		if q.Id == 0 {
 			continue
 		}
 		keys := uniqueSortedSkillKeysFromTags(q.Tags)
 		row := map[string]interface{}{
-			"question_number": q.QuestionNumber,
+			"question_number": q.Id,
 			"skills":          make([]map[string]interface{}, 0, len(keys)),
 		}
 		for _, k := range keys {
