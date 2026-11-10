@@ -119,5 +119,8 @@ func AutoMigrate() error {
 	}
 
 	log.Println("数据库表迁移完成")
+	if err := EnsureBuiltinRoles(DB); err != nil {
+		return fmt.Errorf("初始化基础角色失败: %w", err)
+	}
 	return BackfillSubmissionVerdicts()
 }

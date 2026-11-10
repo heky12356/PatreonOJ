@@ -158,7 +158,7 @@ func (sc *SubmissionController) GetSubmissionResult(c *gin.Context) {
 	if m, ok := response["message"].(string); ok && m != "" {
 		msg = m
 	}
-	shared.APIOK(c, http.StatusOK, msg, response)
+	shared.APIOK(c, http.StatusOK, msg, gin.H{"data": response})
 }
 
 func (sc *SubmissionController) ListProblemSubmissions(c *gin.Context) {

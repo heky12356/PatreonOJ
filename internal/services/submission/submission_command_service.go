@@ -158,6 +158,7 @@ func (s *SubmissionCommandService) buildSubmissionResult(submissionID string, vi
 		"verdict":       submission.ResultVerdict(),
 		"username":      author.Username,
 		"source_code":   submission.Code,
+		"code":          submission.Code, // Legacy clients unwrap data and expect this source alias.
 		"language":      submission.Language,
 		"runtime_ms":    submission.RuntimeMs,
 		"memory_kb":     submission.MemoryKB,

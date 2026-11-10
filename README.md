@@ -13,6 +13,8 @@
 - 概览：首页文案、公告的读取和更新
 - OSS：上传、预签名 URL、文件列表
 
+生产启动时会幂等初始化 `admin`、`moderator`、`teacher`、`student`、`user` 基础角色，管理面板通过角色目录接口加载选项。角色权限和直接权限分别保存，账号的实际权限为两者的合并结果。
+
 ## 关于图数据库（Neo4j）
 - 默认关闭，通过 `graph_database.enabled: true` 开启初始化同步；当前网页关系图和学习推荐不依赖 Neo4j。
 - 面向前端展示和图查询的 `/graph/*` 路由已下线，待后续重新设计数据结构后再开放。
@@ -55,6 +57,7 @@ go run cmd/PatreonOJ/main.go
 - `POST /user/register`
 - `POST /user/logout`
 - `GET /user/solves/:uuid`
+- `GET /user/roles`（管理员读取实际可用角色）
 - `GET /user/me`
 - `GET /user/me/problem-status?ids=1,2`（仅按当前会话查询个人题目状态）
 - `GET /user/:id/home`（公开主页；遵守用户的 `show_activity` 设置）
@@ -96,7 +99,7 @@ go run cmd/PatreonOJ/main.go
 - `POST /question/:id`（更新）
 - `DELETE /question/delete`
 
-提交详情通过 `source_code` 返回源码，避免与响应状态码 `code` 重名。提交接口保留任务的 `status`，并以独立 `verdict` 返回 `AC`、`WA`、`RE`、`TLE`、`MLE`、`OLE`、`CE`、`SE` 或排队状态。提交列表支持按 `verdict` 筛选，并返回用户名。公开主页默认展示做题详情，用户可在个人设置修改 `show_activity`；关闭后其他用户不能查看其做题记录、统计或提交代码。
+提交详情通过 `data.source_code` 返回源码；`data.code` 兼容旧客户端，顶层 `code` 保留响应状态码。提交接口保留任务的 `status`，并以独立 `verdict` 返回 `AC`、`WA`、`RE`、`TLE`、`MLE`、`OLE`、`CE`、`SE` 或排队状态。提交列表支持按 `verdict` 筛选，并返回用户名。公开主页默认展示做题详情，用户可在个人设置修改 `show_activity`；关闭后其他用户不能查看其做题记录、统计或提交代码。
 
 ### 提交 `/submission`
 - `POST /submission/`

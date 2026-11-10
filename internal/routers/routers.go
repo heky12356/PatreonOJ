@@ -48,6 +48,7 @@ func RoutersInit(r *gin.Engine, ossClient *oss.OSS) func(context.Context) error 
 	{
 		authUserRouter.GET("/", userCtrl.Index)
 		authUserRouter.GET("/me", userCtrl.GetProfile)
+		authUserRouter.GET("/roles", userCtrl.Roles)
 		authUserRouter.GET("/me/problem-status", userCtrl.ProblemStatuses)
 		authUserRouter.GET("/solve", userSolveCtrl.Show)
 		authUserRouter.POST("/logout", authCtrl.Logout)
