@@ -157,7 +157,7 @@ func (s *SubmissionCommandService) buildSubmissionResult(submissionID string, vi
 	response := map[string]interface{}{
 		"verdict":       submission.ResultVerdict(),
 		"username":      author.Username,
-		"code":          submission.Code,
+		"source_code":   submission.Code,
 		"language":      submission.Language,
 		"runtime_ms":    submission.RuntimeMs,
 		"memory_kb":     submission.MemoryKB,

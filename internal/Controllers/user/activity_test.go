@@ -109,7 +109,7 @@ func TestHomePrivacyProtectsListsDetailsAndLegacySolves(t *testing.T) {
 		t.Fatalf("private detail accessible: %v", err)
 	}
 	result, err := submissionsvc.NewSubmissionCommandService(db, nil).BuildSubmissionResultForViewer("submission-0", alice)
-	if err != nil || result["code"] != "print(3)" || result["verdict"] != "AC" || result["username"] != "alice" {
+	if err != nil || result["source_code"] != "print(3)" || result["verdict"] != "AC" || result["username"] != "alice" {
 		t.Fatalf("bad own code view: %v %+v", err, result)
 	}
 	r := gin.New()

@@ -96,7 +96,7 @@ go run cmd/PatreonOJ/main.go
 - `POST /question/:id`（更新）
 - `DELETE /question/delete`
 
-提交接口保留任务的 `status`，并以独立 `verdict` 返回 `AC`、`WA`、`RE`、`TLE`、`MLE`、`OLE`、`CE`、`SE` 或排队状态。提交列表支持按 `verdict` 筛选，并返回用户名。公开主页默认展示做题详情，用户可在个人设置修改 `show_activity`；关闭后其他用户不能查看其做题记录、统计或提交代码。
+提交详情通过 `source_code` 返回源码，避免与响应状态码 `code` 重名。提交接口保留任务的 `status`，并以独立 `verdict` 返回 `AC`、`WA`、`RE`、`TLE`、`MLE`、`OLE`、`CE`、`SE` 或排队状态。提交列表支持按 `verdict` 筛选，并返回用户名。公开主页默认展示做题详情，用户可在个人设置修改 `show_activity`；关闭后其他用户不能查看其做题记录、统计或提交代码。
 
 ### 提交 `/submission`
 - `POST /submission/`
