@@ -7,7 +7,7 @@
 - 题目：列表、创建、更新、删除、按 `id`/`question_id` 查询
 - 提交：提交代码、查询评测结果、按题目/用户分页查询提交记录
 - 测试用例：单条/批量创建、按题目查询、OSS commit、更新删除
-- 学习推荐：基于用户在某题上的尝试/通过情况，返回推荐题目列表
+- 学习推荐：基于用户在某题上的尝试/通过情况、题目关系和技能掌握度，返回推荐题、题目关系图和学习反馈
 - 概览：首页文案、公告的读取和更新
 - OSS：上传、预签名 URL、文件列表
 
@@ -62,8 +62,17 @@ go run cmd/PatreonOJ/main.go
 - `GET /api/problems/id/:question_id/submissions`
 - `GET /api/users/:user_id/submissions`
 
-### 学习推荐 `/learning`
-- `GET /learning/users/:uuid/questions/:question_id/recommendations?limit=5`
+### 学习推荐与反馈闭环 `/learning`
+- `GET /learning/users/:uuid/feedback?limit=5`
+- `GET /learning/users/:uuid/questions/:id/recommendations?limit=5`
+- `GET /learning/questions/:id/graph?depth=3`
+
+推荐闭环由三部分组成：
+- 题目关系图：`/learning/questions/:id/graph` 基于 `question_relation_edges` 返回 `nodes`、`edges`、`tree`，用于展示当前题目的前置、进阶和相似题关系。
+- 下一题推荐：`/learning/users/:uuid/questions/:id/recommendations` 根据用户在该题上的提交和通过情况判断 `new | learning | challenged | mastered`，再按 `PREREQUISITE`、`NEXT_LEVEL`、`SIMILAR` 和标签匹配返回推荐题。
+- 学习反馈：`/learning/users/:uuid/feedback` 汇总 `user_skill_mastery`、已解题和未解题，返回薄弱技能、已掌握技能、下一步题目和正向反馈文案。
+
+注意：这里的 `:id` 是题目表主键 `question.id`，不是业务题号字段 `question.question_id`。演示数据可通过 `go run ./cmd/seed_demo` 初始化；该命令会重建当前配置指向的数据库，适合演示环境使用。
 
 返回核心字段：
 - `attempts`：尝试次数
@@ -71,6 +80,8 @@ go run cmd/PatreonOJ/main.go
 - `pass_rate`：通过率
 - `state`：`new | learning | challenged | mastered`
 - `recommendations`：推荐题列表（含 `edge_type` 与 `reason`）
+- `weak_skills` / `mastered_skills`：用户学习反馈中的薄弱和已掌握知识点
+- `next_questions` / `positive_feedback`：反馈闭环中的下一步题目和鼓励文案
 
 ### 题目 `/question`
 - `GET /question/`
@@ -88,11 +99,8 @@ go run cmd/PatreonOJ/main.go
 
 ### 测试用例 `/testcase`
 - `GET /testcase/`
-- `GET /testcase/question/:number`
-- `GET /testcase/question/id/:question_id`
+- `GET /testcase/question/:id`
 - `GET /testcase/:id`
-- `POST /testcase/`
-- `POST /testcase/batch`
 - `POST /testcase/oss/commit`
 - `PUT /testcase/:id`
 - `DELETE /testcase/:id`

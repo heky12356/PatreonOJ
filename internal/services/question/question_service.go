@@ -71,9 +71,22 @@ func (s *QuestionService) List(q, difficult string, isAdmin bool, pageIdx, pageS
 	base := s.db.Model(&models.Question{}).Where("difficulty LIKE ? AND status LIKE ?", diff, status)
 	if query != "%" {
 		if queryHasNumber {
-			base = base.Where("(title LIKE ? OR question_id LIKE ? OR id = ?)", query, query, queryNumber)
+			base = base.Where(
+				"(title LIKE ? OR question_id LIKE ? OR tags LIKE ? OR content LIKE ? OR id = ?)",
+				query,
+				query,
+				query,
+				query,
+				queryNumber,
+			)
 		} else {
-			base = base.Where("(title LIKE ? OR question_id LIKE ?)", query, query)
+			base = base.Where(
+				"(title LIKE ? OR question_id LIKE ? OR tags LIKE ? OR content LIKE ?)",
+				query,
+				query,
+				query,
+				query,
+			)
 		}
 	}
 

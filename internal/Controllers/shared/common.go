@@ -1,6 +1,7 @@
 package shared
 
 import (
+	"strconv"
 	"strings"
 
 	"patreonoj/internal/models"
@@ -10,11 +11,18 @@ import (
 	"gorm.io/gorm"
 )
 
-func CanAccessUserState(operatorUUID, targetUUID string) bool {
-	if operatorUUID == targetUUID {
-		return true
+func CanAccessUserState(user models.User, targetID string) bool {
+	opID := strconv.Itoa(user.Id)
+	isAdmin := util.UserInstance.HasPermission(user, "admin")
+
+	if targetID == "" {
+		return false
 	}
-	return util.UserInstance.HasPermission(operatorUUID, "admin")
+	if opID != targetID && !isAdmin {
+		return false
+	}
+
+	return true
 }
 
 func RequireOperatorUUID(db *gorm.DB, c *gin.Context) (string, bool) {

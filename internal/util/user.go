@@ -10,25 +10,23 @@ type User struct {
 	permissionCheck permissionCheck
 }
 
-func (u *User) HasPermission(uuid string, perm string) bool {
-	return u.permissionCheck.hasPermission(uuid, perm)
+func (u *User) HasPermission(user models.User, perm string) bool {
+	return u.permissionCheck.hasPermission(user, perm)
 }
 
 type permissionCheck interface {
-	hasPermission(uuid string, perm string) bool
+	hasPermission(user models.User, perm string) bool
 }
 
 type permissionCheckImpl struct{}
 
-func (p *permissionCheckImpl) hasPermission(uuid string, perm string) bool {
-	if uuid == "" {
-		return false
-	}
-
-	var user models.User
-	if err := models.DB.Preload("Roles.Permissions").Where("uuid = ?", uuid).First(&user).Error; err != nil {
-		return false
-	}
+// 通过id查权限
+func (p *permissionCheckImpl) hasPermission(user models.User, perm string) bool {
+	// 在auth时直接直接查好然后放到user，然后直接传user进来就行了
+	// var user models.User
+	// if err := models.DB.Preload("Roles.Permissions").Where("uuid = ?", uuid).First(&user).Error; err != nil {
+	// 	return false
+	// }
 
 	if user.Status != "" && user.Status != "active" {
 		return false

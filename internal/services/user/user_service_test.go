@@ -53,12 +53,41 @@ func TestUserService_List(t *testing.T) {
 	seedUserForService(t, db, "u1", "uuid-1")
 	svc := NewUserService(db)
 
-	users, err := svc.List()
+	users, err := svc.List(UserListFilter{})
 	if err != nil {
 		t.Fatalf("List failed: %v", err)
 	}
 	if len(users) != 1 {
 		t.Fatalf("expected 1 user, got %d", len(users))
+	}
+}
+
+func TestUserService_List_FilterByKeywordAndRole(t *testing.T) {
+	db := newUserServiceTestDB(t)
+	adminRole := seedRoleForService(t, db, "admin")
+	userRole := seedRoleForService(t, db, "user")
+	alice := seedUserForService(t, db, "alice", "uuid-alice")
+	bob := seedUserForService(t, db, "bob", "uuid-bob")
+	if err := db.Model(&alice).Association("Roles").Replace(&[]models.Role{adminRole}); err != nil {
+		t.Fatalf("attach alice role failed: %v", err)
+	}
+	if err := db.Model(&bob).Association("Roles").Replace(&[]models.Role{userRole}); err != nil {
+		t.Fatalf("attach bob role failed: %v", err)
+	}
+
+	svc := NewUserService(db)
+	users, err := svc.List(UserListFilter{
+		Keyword:  "ali",
+		RoleCode: "admin",
+	})
+	if err != nil {
+		t.Fatalf("List with filter failed: %v", err)
+	}
+	if len(users) != 1 {
+		t.Fatalf("expected 1 filtered user, got %d", len(users))
+	}
+	if users[0].Username != "alice" {
+		t.Fatalf("expected alice, got %q", users[0].Username)
 	}
 }
 
@@ -89,7 +118,7 @@ func TestUserService_UpdateByUUID_RoleNotFound(t *testing.T) {
 	seedUserForService(t, db, "u1", "uuid-1")
 	svc := NewUserService(db)
 
-	_, err := svc.UpdateByUUID("uuid-1", UserUpdateInput{RoleCodes: []string{"admin"}})
+	_, err := svc.UpdateByUUID("uuid-1", UserUpdateInput{RoleCodes: &[]string{"admin"}})
 	if !errors.Is(err, ErrUserRoleNotFound) {
 		t.Fatalf("expected ErrUserRoleNotFound, got %v", err)
 	}
@@ -110,7 +139,7 @@ func TestUserService_UpdateByUUID_Success(t *testing.T) {
 		Email:       &email,
 		Status:      &status,
 		Permissions: &permissions,
-		RoleCodes:   []string{"admin"},
+		RoleCodes:   &[]string{"admin"},
 	})
 	if err != nil {
 		t.Fatalf("UpdateByUUID failed: %v", err)
@@ -125,5 +154,28 @@ func TestUserService_UpdateByUUID_Success(t *testing.T) {
 	}
 	if len(out.Roles) != 1 || out.Roles[0].ID != adminRole.ID {
 		t.Fatalf("unexpected roles: %+v", out.Roles)
+	}
+}
+
+func TestUserService_UpdateByUUID_ClearRoles(t *testing.T) {
+	db := newUserServiceTestDB(t)
+	user := seedUserForService(t, db, "u1", "uuid-1")
+	adminRole := seedRoleForService(t, db, "admin")
+	if err := db.Model(&user).Association("Roles").Replace(&[]models.Role{adminRole}); err != nil {
+		t.Fatalf("seed roles failed: %v", err)
+	}
+
+	svc := NewUserService(db)
+	empty := []string{}
+	if _, err := svc.UpdateByUUID(user.UUID, UserUpdateInput{RoleCodes: &empty}); err != nil {
+		t.Fatalf("UpdateByUUID clear roles failed: %v", err)
+	}
+
+	out, err := svc.GetByUUID(user.UUID)
+	if err != nil {
+		t.Fatalf("GetByUUID failed: %v", err)
+	}
+	if len(out.Roles) != 0 {
+		t.Fatalf("expected no roles, got %+v", out.Roles)
 	}
 }

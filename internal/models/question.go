@@ -1,4 +1,4 @@
-package models
+﻿package models
 
 type Question struct {
 	Id int `gorm:"primaryKey;autoIncrement" json:"id"`
@@ -26,17 +26,12 @@ type TestCase struct {
 	ID         uint `gorm:"primaryKey"`
 	QuestionID int  `json:"question_id" gorm:"index"`
 
-	// Backward-compatible inline testcase fields.
-	Input          string `gorm:"type:text" json:"input"`
-	ExpectedOutput string `gorm:"type:text" json:"expected_output"`
+	InputKey   string `json:"input_key" gorm:"type:varchar(255)"`
+	OutputKey  string `json:"output_key" gorm:"type:varchar(255)"`
+	InputSize  int64  `json:"input_size"`
+	OutputSize int64  `json:"output_size"`
 
-	// OSS 存储字段
-	InputKey   string `json:"input_key" gorm:"type:varchar(255)"`  // 输入文件的 OSS 路径
-	OutputKey  string `json:"output_key" gorm:"type:varchar(255)"` // 输出文件的 OSS 路径
-	InputSize  int64  `json:"input_size"`                          // 输入文件大小 (字节)
-	OutputSize int64  `json:"output_size"`                         // 输出文件大小 (字节)
-
-	IsHidden bool `json:"is_hidden"` // 是否隐藏测试用例
+	IsHidden bool `json:"is_hidden"`
 }
 
 func (Question) TableName() string {

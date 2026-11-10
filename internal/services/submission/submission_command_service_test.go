@@ -201,10 +201,12 @@ func TestEnsureSubmissionErrorCode(t *testing.T) {
 		want   string
 	}{
 		{"test case missing", "E001"},
+		{"question has no available testcases", "E001"},
 		{"compile failed", "E002"},
 		{"timeout exceeded", "E003"},
 		{"memory exceeded", "E004"},
 		{"network unavailable", "E005"},
+		{"go-judge api error: 404 - 404 page not found", "E005"},
 		{"unknown", "E999"},
 	}
 

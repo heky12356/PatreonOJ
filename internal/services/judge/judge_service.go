@@ -1,16 +1,11 @@
 package judge
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"net/http"
-	"path"
-	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -23,7 +18,6 @@ import (
 )
 
 type JudgeService struct {
-	JudgeAPI          string              // 评测系统API地址
 	DB                *gorm.DB            // 数据库连接
 	HTTPClient        *http.Client        // HTTP客户端
 	LocalJudgeService *LocalJudgeService  // 本地评测服务
@@ -53,7 +47,6 @@ func NewJudgeService(cfg *config.JudgeConfig, db *gorm.DB, ossClient *oss.OSS, o
 	}
 
 	return &JudgeService{
-		JudgeAPI:          cfg.APIURL,
 		DB:                db,
 		Config:            cfg,
 		LocalJudgeService: localJudge,
@@ -145,41 +138,45 @@ func (js *JudgeService) JudgeCode(submission *models.Submission) error {
 
 // executeJudgement 执行实际评测逻辑
 func (js *JudgeService) executeJudgement(code string, testCases []models.TestCase) ([]models.TestCaseResult, error) {
-	// 根据配置选择评测方式
+	// 本地优先模式
 	if js.Config.Mode == "local" && js.LocalJudgeService != nil {
-		// 本地评测
 		log.Printf("Local judge mode enabled")
-
 		return js.executeLocalJudgement(code, testCases)
-	} else {
-		// 远程API评测
-		return js.executeRemoteJudgement(code, testCases)
 	}
+
+	// 远程评测
+	results, err := js.executeRemoteJudgement(code, testCases)
+	if err == nil {
+		return results, nil
+	}
+
+	// 远程失败时，如果本地评测可用则自动降级
+	if js.LocalJudgeService != nil {
+		log.Printf("remote judge failed, fallback to local judge: %v", err)
+		return js.executeLocalJudgement(code, testCases)
+	}
+	return nil, err
 }
 
 // loadTestCaseIO 加载测试用例的输入和输出
 func (js *JudgeService) loadTestCaseIO(ctx context.Context, tc models.TestCase) (string, string, error) {
-	input := tc.Input
-	expected := tc.ExpectedOutput
-
-	if js.OSSClient != nil && js.OSSBucket != "" {
-		if tc.InputKey != "" {
-			b, err := js.OSSClient.GetObjectBytes(ctx, js.OSSBucket, tc.InputKey)
-			if err != nil {
-				return "", "", fmt.Errorf("读取测试用例输入失败(key=%s): %w", tc.InputKey, err)
-			}
-			input = string(b)
-		}
-		if tc.OutputKey != "" {
-			b, err := js.OSSClient.GetObjectBytes(ctx, js.OSSBucket, tc.OutputKey)
-			if err != nil {
-				return "", "", fmt.Errorf("读取测试用例输出失败(key=%s): %w", tc.OutputKey, err)
-			}
-			expected = string(b)
-		}
+	if js.OSSClient == nil || js.OSSBucket == "" {
+		return "", "", fmt.Errorf("oss is not configured")
+	}
+	if strings.TrimSpace(tc.InputKey) == "" || strings.TrimSpace(tc.OutputKey) == "" {
+		return "", "", fmt.Errorf("testcase key is empty")
 	}
 
-	return input, strings.TrimSpace(expected), nil
+	inputBytes, err := js.OSSClient.GetObjectBytes(ctx, js.OSSBucket, tc.InputKey)
+	if err != nil {
+		return "", "", fmt.Errorf("read testcase input failed(key=%s): %w", tc.InputKey, err)
+	}
+	outputBytes, err := js.OSSClient.GetObjectBytes(ctx, js.OSSBucket, tc.OutputKey)
+	if err != nil {
+		return "", "", fmt.Errorf("read testcase output failed(key=%s): %w", tc.OutputKey, err)
+	}
+
+	return string(inputBytes), strings.TrimSpace(string(outputBytes)), nil
 }
 
 // executeLocalJudgement 执行本地评测
@@ -324,144 +321,18 @@ func (js *JudgeService) getTestCases(questionID int) ([]models.TestCase, error) 
 
 	if err := js.DB.Where("question_id = ? AND is_hidden = ?", questionID, false).
 		Find(&testCases).Error; err != nil {
-		return nil, fmt.Errorf("数据库查询失败: %w", err)
-	}
-
-	if len(testCases) != 0 {
-		return testCases, nil
-	}
-
-	if js.OSSClient == nil || js.OSSBucket == "" {
-		return nil, fmt.Errorf("题目没有可用的测试用例")
-	}
-
-	var question models.Question
-	if err := js.DB.Where("id = ?", questionID).First(&question).Error; err != nil {
-		return nil, fmt.Errorf("题目没有可用的测试用例")
-	}
-
-	prefix := fmt.Sprintf("problems/%s/", question.QuestionId)
-
-	ctx := context.Background()
-	objects, err := js.OSSClient.ListObjects(ctx, js.OSSBucket, prefix, true)
-	if err != nil {
-		return nil, fmt.Errorf("获取测试用例失败: %w", err)
-	}
-
-	type pair struct {
-		inKey  string
-		outKey string
-	}
-	pairs := make(map[int]*pair)
-
-	for _, key := range objects {
-		if strings.HasSuffix(key, "/") {
-			continue
-		}
-
-		name := path.Base(key)
-		if strings.HasSuffix(name, ".in") {
-			n, err := strconv.Atoi(strings.TrimSuffix(name, ".in"))
-			if err != nil {
-				continue
-			}
-			p := pairs[n]
-			if p == nil {
-				p = &pair{}
-				pairs[n] = p
-			}
-			p.inKey = key
-			continue
-		}
-		if strings.HasSuffix(name, ".out") {
-			n, err := strconv.Atoi(strings.TrimSuffix(name, ".out"))
-			if err != nil {
-				continue
-			}
-			p := pairs[n]
-			if p == nil {
-				p = &pair{}
-				pairs[n] = p
-			}
-			p.outKey = key
-			continue
-		}
-	}
-
-	nums := make([]int, 0, len(pairs))
-	for n := range pairs {
-		nums = append(nums, n)
-	}
-	sort.Ints(nums)
-
-	for _, n := range nums {
-		p := pairs[n]
-		if p == nil || p.inKey == "" || p.outKey == "" {
-			continue
-		}
-		testCases = append(testCases, models.TestCase{
-			QuestionID: questionID,
-			InputKey:   p.inKey,
-			OutputKey:  p.outKey,
-			IsHidden:   false,
-		})
+		return nil, fmt.Errorf("query testcases failed: %w", err)
 	}
 
 	if len(testCases) == 0 {
-		return nil, fmt.Errorf("题目没有可用的测试用例")
+		return nil, fmt.Errorf("question has no available testcases")
+	}
+
+	for _, tc := range testCases {
+		if strings.TrimSpace(tc.InputKey) == "" || strings.TrimSpace(tc.OutputKey) == "" {
+			return nil, fmt.Errorf("testcase record is not oss-based")
+		}
 	}
 
 	return testCases, nil
-}
-
-// callJudge 调用评测系统API
-func (js *JudgeService) callJudge(code, input string) (string, error) {
-	requestBody := map[string]interface{}{
-		"code":    code,
-		"input":   input,
-		"timeout": 5000, // 5秒超时
-	}
-
-	jsonBody, err := json.Marshal(requestBody)
-	if err != nil {
-		return "", fmt.Errorf("JSON编码失败: %w", err)
-	}
-
-	req, err := http.NewRequest("POST", js.JudgeAPI, bytes.NewBuffer(jsonBody))
-	if err != nil {
-		return "", fmt.Errorf("创建请求失败: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := js.HTTPClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("请求评测系统失败: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("评测系统返回错误状态码: %d", resp.StatusCode)
-	}
-
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("读取响应体失败: %w", err)
-	}
-
-	var response struct {
-		Output     string `json:"output"`
-		Error      string `json:"error"`
-		TimeUsed   int64  `json:"time_used"`
-		MemoryUsed int64  `json:"memory_used"`
-	}
-
-	if err := json.Unmarshal(body, &response); err != nil {
-		return "", fmt.Errorf("解析JSON响应失败: %w", err)
-	}
-
-	if response.Error != "" {
-		return "", fmt.Errorf("评测系统错误: %s", response.Error)
-	}
-
-	return response.Output, nil
 }

@@ -3,8 +3,10 @@ package user
 import (
 	"errors"
 	"net/http"
+	"strconv"
 
 	"patreonoj/internal/controllers/shared"
+	"patreonoj/internal/models"
 	usersvc "patreonoj/internal/services/user"
 	"patreonoj/internal/util"
 
@@ -26,16 +28,36 @@ func NewUserController(db *gorm.DB) *UserController {
 }
 
 type UpdateUserRequest struct {
-	Nickname    *string  `json:"nickname"`
-	Email       *string  `json:"email"`
-	AvatarURL   *string  `json:"avatar_url"`
-	Status      *string  `json:"status"`
-	Permissions *string  `json:"permissions"`
-	RoleCodes   []string `json:"role_codes"`
+	Id          *string   `json:"id"` // 前端传id判断修改的用户
+	Nickname    *string   `json:"nickname"`
+	Email       *string   `json:"email"`
+	AvatarURL   *string   `json:"avatar_url"`
+	Status      *string   `json:"status"`
+	Permissions *string   `json:"permissions"`
+	RoleCodes   *[]string `json:"role_codes"`
 }
 
 func (uc *UserController) Index(c *gin.Context) {
-	userList, err := uc.service.List()
+	// 这是旧的鉴权，后面改用中间件
+	// operatorUUID, ok := shared.RequireOperatorUUID(uc.db, c)
+	// if !ok {
+	// 	return
+	// }
+	user, ok := c.Get("currentUser")
+	if !ok {
+		shared.APIError(c, http.StatusForbidden, "未授权")
+		return
+	}
+	if !util.UserInstance.HasPermission(user.(models.User), "admin") {
+		shared.APIError(c, http.StatusForbidden, "permission denied")
+		return
+	}
+
+	userList, err := uc.service.List(usersvc.UserListFilter{
+		Keyword:  c.Query("keyword"),
+		Status:   c.Query("status"),
+		RoleCode: c.Query("role_code"),
+	})
 	if err != nil {
 		shared.APIError(c, http.StatusInternalServerError, "query users failed")
 		return
@@ -44,14 +66,52 @@ func (uc *UserController) Index(c *gin.Context) {
 }
 
 func (uc *UserController) Show(c *gin.Context) {
-	targetUUID := c.Param("uuid")
-	operatorUUID := c.Query("operator_uuid")
-	if !shared.CanAccessUserState(operatorUUID, targetUUID) {
+	id := c.Param("id")
+	user, ok := c.Get("currentUser")
+	if !ok {
+		shared.APIError(c, http.StatusForbidden, "未登录")
+		return
+	}
+	if !util.UserInstance.HasPermission(user.(models.User), "admin") {
 		shared.APIError(c, http.StatusForbidden, "permission denied")
 		return
 	}
 
-	user, err := uc.service.GetByUUID(targetUUID)
+	user, err := uc.service.GetProfileById(id)
+	if errors.Is(err, usersvc.ErrUserNotFound) {
+		shared.APIError(c, http.StatusNotFound, "user not found")
+		return
+	}
+	if err != nil {
+		shared.APIError(c, http.StatusInternalServerError, "query user failed")
+		return
+	}
+	shared.APIOK(c, http.StatusOK, "ok", gin.H{"result": user})
+}
+
+func (uc *UserController) GetProfilePublic(c *gin.Context) {
+	id := c.Param("id")
+
+	user, err := uc.service.GetProfilePublic(id)
+	if errors.Is(err, usersvc.ErrUserNotFound) {
+		shared.APIError(c, http.StatusNotFound, "user not found")
+		return
+	}
+	if err != nil {
+		shared.APIError(c, http.StatusInternalServerError, "query user failed")
+		return
+	}
+	shared.APIOK(c, http.StatusOK, "ok", gin.H{"result": user})
+}
+
+func (uc *UserController) GetProfile(c *gin.Context) {
+	user, ok := c.Get("currentUser")
+	if !ok {
+		shared.APIError(c, http.StatusForbidden, "user not login")
+		return
+	}
+
+	user, err := uc.service.GetProfileById(strconv.Itoa(user.(models.User).Id))
 	if errors.Is(err, usersvc.ErrUserNotFound) {
 		shared.APIError(c, http.StatusNotFound, "user not found")
 		return
@@ -64,26 +124,30 @@ func (uc *UserController) Show(c *gin.Context) {
 }
 
 func (uc *UserController) Update(c *gin.Context) {
-	targetUUID := c.Param("uuid")
-	operatorUUID := c.Query("operator_uuid")
-	if !shared.CanAccessUserState(operatorUUID, targetUUID) {
-		shared.APIError(c, http.StatusForbidden, "permission denied")
-		return
-	}
-
 	var req UpdateUserRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		shared.APIError(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	isAdmin := util.UserInstance.HasPermission(operatorUUID, "admin")
-	if !isAdmin && (req.Status != nil || req.Permissions != nil || len(req.RoleCodes) > 0) {
+	targetID := req.Id
+
+	user, ok := c.Get("currentUser")
+	if !ok {
+		return
+	}
+	if !shared.CanAccessUserState(user.(models.User), *targetID) {
+		shared.APIError(c, http.StatusForbidden, "permission denied")
+		return
+	}
+
+	isAdmin := util.UserInstance.HasPermission(user.(models.User), "admin")
+	if !isAdmin && (req.Status != nil || req.Permissions != nil || req.RoleCodes != nil) {
 		shared.APIError(c, http.StatusForbidden, "only admin can update status, permissions and roles")
 		return
 	}
 
-	user, err := uc.service.UpdateByUUID(targetUUID, usersvc.UserUpdateInput{
+	user, err := uc.service.UpdateByID(*targetID, usersvc.UserUpdateInput{
 		Nickname:    req.Nickname,
 		Email:       req.Email,
 		AvatarURL:   req.AvatarURL,

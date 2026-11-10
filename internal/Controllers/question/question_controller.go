@@ -36,8 +36,11 @@ func (con *QuestionController) Index(c *gin.Context) {
 
 	q := c.DefaultQuery("q", "%")
 	difficult := c.DefaultQuery("difficult", "")
-	uuid := c.DefaultQuery("uuid", "")
-	isAdmin := util.UserInstance.HasPermission(uuid, "admin")
+	isAdmin := false
+	user, ok := c.Get("currentUser")
+	if ok {
+		isAdmin = util.UserInstance.HasPermission(user.(models.User), "admin")
+	}
 
 	result, err := con.service.List(q, difficult, isAdmin, pageIdx, pageSize)
 	if err != nil {
@@ -73,6 +76,7 @@ func (con *QuestionController) GetNewProblems(c *gin.Context) {
 	})
 }
 
+// 新增题面
 func (con *QuestionController) Store(c *gin.Context) {
 	var request struct {
 		QuestionID  string `json:"question_id"`
@@ -128,6 +132,17 @@ func (con *QuestionController) Show(c *gin.Context) {
 	}
 
 	question, err := con.service.GetByID(id)
+
+	user, ok := c.Get("currentUser")
+	isAdmin := false
+	if ok {
+		isAdmin = util.UserInstance.HasPermission(user.(models.User), "admin")
+	}
+	if !isAdmin && question.Status != "published" {
+		shared.APIError(c, http.StatusForbidden, "没有权限")
+		return
+	}
+
 	if errors.Is(err, questionsvc.ErrQuestionRecordNotFound) {
 		shared.APIError(c, http.StatusNotFound, "question not found")
 		return
@@ -140,6 +155,7 @@ func (con *QuestionController) Show(c *gin.Context) {
 	shared.APIOK(c, http.StatusOK, "ok", gin.H{"data": question})
 }
 
+// 更新题面
 func (con *QuestionController) Update(c *gin.Context) {
 	idStr := c.Param("id")
 	if idStr == "" {
@@ -176,6 +192,7 @@ type DeleteProblemRequest struct {
 	UUID string `json:"uuid"`
 }
 
+// 删除题目
 func (con *QuestionController) DeleteProblem(c *gin.Context) {
 	var req DeleteProblemRequest
 	if err := c.ShouldBindJSON(&req); err != nil {

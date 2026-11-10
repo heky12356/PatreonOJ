@@ -2,6 +2,7 @@ package learning
 
 import (
 	"errors"
+	"sort"
 	"strings"
 
 	"patreonoj/internal/models"
@@ -45,6 +46,60 @@ type LearningRecommendationResult struct {
 	Recommendations []LearningRecommendation `json:"recommendations"`
 }
 
+type LearningFeedbackQuestion struct {
+	QuestionID string `json:"question_id"`
+	QuestionPK int    `json:"question_pk"`
+	Title      string `json:"title"`
+	Difficulty string `json:"difficulty"`
+	Tags       string `json:"tags"`
+	Reason     string `json:"reason"`
+}
+
+type LearningUserFeedback struct {
+	UserUUID         string                     `json:"user_uuid"`
+	Stage            string                     `json:"stage"`
+	WeakSkills       []string                   `json:"weak_skills"`
+	MasteredSkills   []string                   `json:"mastered_skills"`
+	NextQuestions    []LearningFeedbackQuestion `json:"next_questions"`
+	PositiveFeedback string                     `json:"positive_feedback"`
+}
+
+type QuestionGraphNode struct {
+	QuestionID string `json:"question_id"`
+	QuestionPK int    `json:"question_pk"`
+	Title      string `json:"title"`
+	Difficulty string `json:"difficulty"`
+	Tags       string `json:"tags"`
+}
+
+type QuestionGraphEdge struct {
+	FromQuestionID string `json:"from_question_id"`
+	ToQuestionID   string `json:"to_question_id"`
+	EdgeType       string `json:"edge_type"`
+}
+
+type QuestionGraphTreeChild struct {
+	EdgeType string             `json:"edge_type"`
+	Node     *QuestionGraphTree `json:"node"`
+}
+
+type QuestionGraphTree struct {
+	QuestionID string                   `json:"question_id"`
+	QuestionPK int                      `json:"question_pk"`
+	Title      string                   `json:"title"`
+	Difficulty string                   `json:"difficulty"`
+	Tags       string                   `json:"tags"`
+	Children   []QuestionGraphTreeChild `json:"children"`
+}
+
+type QuestionGraphResult struct {
+	RootQuestionID string              `json:"root_question_id"`
+	RootQuestionPK int                 `json:"root_question_pk"`
+	Nodes          []QuestionGraphNode `json:"nodes"`
+	Edges          []QuestionGraphEdge `json:"edges"`
+	Tree           *QuestionGraphTree  `json:"tree"`
+}
+
 type LearningService struct {
 	db *gorm.DB
 }
@@ -53,11 +108,176 @@ func NewLearningService(db *gorm.DB) *LearningService {
 	return &LearningService{db: db}
 }
 
+func (s *LearningService) BuildQuestionGraph(questionPK int, depth int) (*QuestionGraphResult, error) {
+	if depth <= 0 {
+		depth = 2
+	}
+	if depth > 6 {
+		depth = 6
+	}
+
+	var root models.Question
+	if err := s.db.Where("id = ?", questionPK).First(&root).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrLearningQuestionNotFound
+		}
+		return nil, err
+	}
+
+	rootID := strings.TrimSpace(root.QuestionId)
+	discovered := map[string]struct{}{rootID: {}}
+	frontier := []string{rootID}
+	edgeSet := make(map[string]models.QuestionRelationEdge)
+
+	for i := 0; i < depth && len(frontier) > 0; i++ {
+		var edges []models.QuestionRelationEdge
+		if err := s.db.Where("from_question_id IN ? OR to_question_id IN ?", frontier, frontier).Find(&edges).Error; err != nil {
+			return nil, err
+		}
+
+		next := make(map[string]struct{})
+		for _, e := range edges {
+			key := string(e.EdgeType) + "|" + e.FromQuestionID + "|" + e.ToQuestionID
+			edgeSet[key] = e
+
+			if _, ok := discovered[e.FromQuestionID]; !ok {
+				next[e.FromQuestionID] = struct{}{}
+			}
+			if _, ok := discovered[e.ToQuestionID]; !ok {
+				next[e.ToQuestionID] = struct{}{}
+			}
+		}
+
+		frontier = mapKeys(next)
+		for _, id := range frontier {
+			discovered[id] = struct{}{}
+		}
+	}
+
+	questionIDs := mapKeys(discovered)
+	questions := make([]models.Question, 0, len(questionIDs))
+	if len(questionIDs) > 0 {
+		if err := s.db.Where("question_id IN ?", questionIDs).Find(&questions).Error; err != nil {
+			return nil, err
+		}
+	}
+	questionByID := make(map[string]models.Question, len(questions))
+	for _, q := range questions {
+		questionByID[q.QuestionId] = q
+	}
+
+	nodes := make([]QuestionGraphNode, 0, len(questions))
+	for _, q := range questions {
+		nodes = append(nodes, QuestionGraphNode{
+			QuestionID: q.QuestionId,
+			QuestionPK: q.Id,
+			Title:      q.Title,
+			Difficulty: q.Difficulty,
+			Tags:       q.Tags,
+		})
+	}
+	sort.Slice(nodes, func(i, j int) bool {
+		return nodes[i].QuestionPK < nodes[j].QuestionPK
+	})
+
+	edges := make([]QuestionGraphEdge, 0, len(edgeSet))
+	for _, e := range edgeSet {
+		edges = append(edges, QuestionGraphEdge{
+			FromQuestionID: e.FromQuestionID,
+			ToQuestionID:   e.ToQuestionID,
+			EdgeType:       string(e.EdgeType),
+		})
+	}
+	sort.Slice(edges, func(i, j int) bool {
+		if edges[i].FromQuestionID != edges[j].FromQuestionID {
+			return edges[i].FromQuestionID < edges[j].FromQuestionID
+		}
+		if edges[i].ToQuestionID != edges[j].ToQuestionID {
+			return edges[i].ToQuestionID < edges[j].ToQuestionID
+		}
+		return edges[i].EdgeType < edges[j].EdgeType
+	})
+
+	tree := buildGraphTree(rootID, questionByID, edges)
+	return &QuestionGraphResult{
+		RootQuestionID: root.QuestionId,
+		RootQuestionPK: root.Id,
+		Nodes:          nodes,
+		Edges:          edges,
+		Tree:           tree,
+	}, nil
+}
+
+func buildGraphTree(rootID string, questionByID map[string]models.Question, edges []QuestionGraphEdge) *QuestionGraphTree {
+	adj := make(map[string][]QuestionGraphEdge)
+	for _, e := range edges {
+		adj[e.FromQuestionID] = append(adj[e.FromQuestionID], e)
+	}
+	for from := range adj {
+		sort.Slice(adj[from], func(i, j int) bool {
+			return adj[from][i].ToQuestionID < adj[from][j].ToQuestionID
+		})
+	}
+
+	used := make(map[string]struct{})
+	var build func(id string) *QuestionGraphTree
+	build = func(id string) *QuestionGraphTree {
+		q, ok := questionByID[id]
+		if !ok {
+			return nil
+		}
+		if _, exists := used[id]; exists {
+			return nil
+		}
+		used[id] = struct{}{}
+
+		node := &QuestionGraphTree{
+			QuestionID: q.QuestionId,
+			QuestionPK: q.Id,
+			Title:      q.Title,
+			Difficulty: q.Difficulty,
+			Tags:       q.Tags,
+			Children:   make([]QuestionGraphTreeChild, 0),
+		}
+		for _, e := range adj[id] {
+			child := build(e.ToQuestionID)
+			if child == nil {
+				continue
+			}
+			node.Children = append(node.Children, QuestionGraphTreeChild{
+				EdgeType: e.EdgeType,
+				Node:     child,
+			})
+		}
+		return node
+	}
+
+	return build(rootID)
+}
+
+func mapKeys[T any](m map[string]T) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		k = strings.TrimSpace(k)
+		if k == "" {
+			continue
+		}
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
 type recCandidate struct {
 	questionID string
 	edgeType   string
 	reason     string
 }
+
+const (
+	feedbackWeakThreshold     = 0.5
+	feedbackMasteredThreshold = 0.8
+)
 
 func (s *LearningService) RecommendNextQuestions(userUUID string, questionPK int, limit int) (*LearningRecommendationResult, error) {
 	userUUID = strings.TrimSpace(userUUID)
@@ -139,16 +359,204 @@ func (s *LearningService) RecommendNextQuestions(userUUID string, questionPK int
 	}, nil
 }
 
+func (s *LearningService) BuildUserFeedback(userUUID string, limit int) (*LearningUserFeedback, error) {
+	userUUID = strings.TrimSpace(userUUID)
+	if limit <= 0 {
+		limit = 5
+	}
+	if limit > 20 {
+		limit = 20
+	}
+
+	var user models.User
+	if err := s.db.Where("uuid = ?", userUUID).First(&user).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrLearningUserNotFound
+		}
+		return nil, err
+	}
+
+	masteries := make([]models.UserSkillMastery, 0)
+	if err := s.db.Where("user_id = ?", userUUID).
+		Order("mastery ASC, skill_key ASC").
+		Find(&masteries).Error; err != nil {
+		return nil, err
+	}
+
+	weakSkills, masteredSkills := classifyFeedbackSkills(masteries)
+	solvedQuestionIDs, err := s.listSolvedQuestionIDs(userUUID)
+	if err != nil {
+		return nil, err
+	}
+
+	targetSkills := append([]string{}, weakSkills...)
+	if len(targetSkills) == 0 {
+		targetSkills = append(targetSkills, masteredSkills...)
+	}
+
+	exists := make(map[string]struct{})
+	nextQuestions, err := s.collectFeedbackQuestionsBySkills(targetSkills, solvedQuestionIDs, exists, limit)
+	if err != nil {
+		return nil, err
+	}
+	if len(nextQuestions) < limit {
+		fallback, err := s.collectFeedbackQuestionsBySkills(nil, solvedQuestionIDs, exists, limit-len(nextQuestions))
+		if err != nil {
+			return nil, err
+		}
+		nextQuestions = append(nextQuestions, fallback...)
+	}
+
+	return &LearningUserFeedback{
+		UserUUID:         userUUID,
+		Stage:            buildFeedbackStage(weakSkills, masteredSkills, len(masteries)),
+		WeakSkills:       weakSkills,
+		MasteredSkills:   masteredSkills,
+		NextQuestions:    nextQuestions,
+		PositiveFeedback: buildPositiveFeedback(weakSkills, masteredSkills, len(nextQuestions)),
+	}, nil
+}
+
+func classifyFeedbackSkills(masteries []models.UserSkillMastery) ([]string, []string) {
+	weakSkills := make([]string, 0)
+	masteredSkills := make([]string, 0)
+	for _, mastery := range masteries {
+		skill := strings.TrimSpace(mastery.SkillKey)
+		if skill == "" {
+			continue
+		}
+		switch {
+		case mastery.Mastery < feedbackWeakThreshold:
+			weakSkills = append(weakSkills, skill)
+		case mastery.Mastery >= feedbackMasteredThreshold:
+			masteredSkills = append(masteredSkills, skill)
+		}
+	}
+	sort.Strings(weakSkills)
+	sort.Strings(masteredSkills)
+	return weakSkills, masteredSkills
+}
+
+func (s *LearningService) collectFeedbackQuestionsBySkills(targetSkills []string, solved map[string]struct{}, exists map[string]struct{}, limit int) ([]LearningFeedbackQuestion, error) {
+	if limit <= 0 {
+		return []LearningFeedbackQuestion{}, nil
+	}
+
+	query := s.db.Model(&models.Question{}).Where("status = ?", "published")
+	if len(targetSkills) > 0 {
+		conds := make([]string, 0, len(targetSkills))
+		args := make([]interface{}, 0, len(targetSkills))
+		for _, skill := range targetSkills {
+			skill = strings.ToLower(strings.TrimSpace(skill))
+			if skill == "" {
+				continue
+			}
+			conds = append(conds, "LOWER(tags) LIKE ?")
+			args = append(args, "%"+skill+"%")
+		}
+		if len(conds) > 0 {
+			query = query.Where(strings.Join(conds, " OR "), args...)
+		}
+	}
+
+	candidates := make([]models.Question, 0)
+	if err := query.Order("id DESC").Limit(limit * 4).Find(&candidates).Error; err != nil {
+		return nil, err
+	}
+
+	out := make([]LearningFeedbackQuestion, 0, limit)
+	for _, q := range candidates {
+		if len(out) >= limit {
+			break
+		}
+		questionID := strings.TrimSpace(q.QuestionId)
+		if questionID == "" {
+			continue
+		}
+		if _, ok := solved[questionID]; ok {
+			continue
+		}
+		if _, ok := exists[questionID]; ok {
+			continue
+		}
+		exists[questionID] = struct{}{}
+
+		out = append(out, LearningFeedbackQuestion{
+			QuestionID: questionID,
+			QuestionPK: q.Id,
+			Title:      q.Title,
+			Difficulty: q.Difficulty,
+			Tags:       q.Tags,
+			Reason:     buildFeedbackQuestionReason(q.Tags, targetSkills),
+		})
+	}
+	return out, nil
+}
+
+func buildFeedbackQuestionReason(tags string, targetSkills []string) string {
+	if len(targetSkills) == 0 {
+		return "先完成一题未掌握记录较少的训练题，积累后续推荐依据。"
+	}
+	for _, skill := range targetSkills {
+		skill = strings.TrimSpace(skill)
+		if skill == "" {
+			continue
+		}
+		if strings.Contains(strings.ToLower(tags), strings.ToLower(skill)) {
+			return "围绕薄弱知识点「" + skill + "」进行针对性练习。"
+		}
+	}
+	return "与当前能力画像相关，适合作为下一步训练题。"
+}
+
+func buildFeedbackStage(weakSkills []string, masteredSkills []string, masteryCount int) string {
+	switch {
+	case masteryCount == 0:
+		return "起步训练阶段"
+	case len(weakSkills) > 0:
+		return formatSkillList(weakSkills, 2) + " 强化阶段"
+	case len(masteredSkills) > 0:
+		return formatSkillList(masteredSkills, 2) + " 进阶阶段"
+	default:
+		return "稳定提升阶段"
+	}
+}
+
+func buildPositiveFeedback(weakSkills []string, masteredSkills []string, questionCount int) string {
+	switch {
+	case len(weakSkills) > 0 && len(masteredSkills) > 0:
+		return "你已经掌握 " + formatSkillList(masteredSkills, 3) + "，接下来建议重点补强 " + formatSkillList(weakSkills, 3) + "。"
+	case len(weakSkills) > 0:
+		return "当前最适合围绕 " + formatSkillList(weakSkills, 3) + " 做针对性训练，先把基础链路补稳。"
+	case len(masteredSkills) > 0:
+		return "你在 " + formatSkillList(masteredSkills, 3) + " 上表现稳定，可以尝试更高一层的综合题。"
+	case questionCount > 0:
+		return "先完成推荐题，系统会根据新的提交记录逐步形成更准确的能力画像。"
+	default:
+		return "当前可用学习数据较少，建议先完成几道基础题来启动个性化推荐。"
+	}
+}
+
+func formatSkillList(skills []string, limit int) string {
+	if len(skills) == 0 {
+		return "基础知识点"
+	}
+	if limit <= 0 || limit > len(skills) {
+		limit = len(skills)
+	}
+	return strings.Join(skills[:limit], "、")
+}
+
 func classifyLearningState(attempts, passCount int64, passRate float64) (LearningState, string) {
 	switch {
 	case attempts == 0:
-		return LearningStateNew, "No attempts yet. Start with similar problems."
+		return LearningStateNew, "还没有尝试记录，建议先从相似题开始。"
 	case passCount > 0 || passRate >= 0.6:
-		return LearningStateMastered, "Current problem is mostly mastered. Try harder or variant problems."
+		return LearningStateMastered, "当前题目基本掌握，可以尝试进阶题或变式题。"
 	case attempts >= 3 && passCount == 0:
-		return LearningStateChallenged, "You seem blocked. Try prerequisite problems first."
+		return LearningStateChallenged, "当前题目卡住了，建议先补前置题。"
 	default:
-		return LearningStateLearning, "You are in progress. Keep practicing with similar problems."
+		return LearningStateLearning, "正在学习阶段，继续练习同类题巩固。"
 	}
 }
 
@@ -197,9 +605,9 @@ func (s *LearningService) collectPrerequisiteCandidates(currentQuestionID string
 
 	out := make([]recCandidate, 0, len(edges))
 	for _, e := range edges {
-		reason := "Fill prerequisite knowledge points."
+		reason := "先补齐该题依赖的前置知识点。"
 		if e.EdgeType == models.QuestionRelationEdgeTypeNextLevel {
-			reason = "Try a simpler stepping-stone problem first."
+			reason = "先做一道更基础的过渡题。"
 		}
 		out = append(out, recCandidate{
 			questionID: e.FromQuestionID,
@@ -220,9 +628,9 @@ func (s *LearningService) collectMasteredCandidates(currentQuestionID string, li
 
 	out := make([]recCandidate, 0, len(edges))
 	for _, e := range edges {
-		reason := "Keep moving to the next level."
+		reason := "继续向下一难度层级进阶。"
 		if e.EdgeType == models.QuestionRelationEdgeTypeSimilar {
-			reason = "Consolidate with same-level variants."
+			reason = "通过同层变式题进一步巩固。"
 		}
 		out = append(out, recCandidate{
 			questionID: e.ToQuestionID,
@@ -245,7 +653,7 @@ func (s *LearningService) collectSimilarCandidates(currentQuestionID string, lim
 		out = append(out, recCandidate{
 			questionID: e.ToQuestionID,
 			edgeType:   string(e.EdgeType),
-			reason:     "Practice similar problems for reinforcement.",
+			reason:     "练习相似题以强化当前知识点。",
 		})
 	}
 
@@ -258,7 +666,7 @@ func (s *LearningService) collectSimilarCandidates(currentQuestionID string, lim
 		out = append(out, recCandidate{
 			questionID: e.FromQuestionID,
 			edgeType:   string(e.EdgeType),
-			reason:     "Practice similar problems for reinforcement.",
+			reason:     "练习相似题以强化当前知识点。",
 		})
 	}
 
@@ -361,7 +769,7 @@ func (s *LearningService) buildTagFallbackRecommendations(current models.Questio
 			Difficulty: q.Difficulty,
 			Tags:       q.Tags,
 			EdgeType:   "TAG_MATCH",
-			Reason:     "Expand practice by tag similarity.",
+			Reason:     "按标签相似度扩展练习范围。",
 		})
 	}
 

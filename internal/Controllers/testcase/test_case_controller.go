@@ -26,23 +26,6 @@ func NewTestCaseController(db *gorm.DB, ossClient *oss.OSS) *TestCaseController 
 	}
 }
 
-type TestCaseRequest struct {
-	QuestionPK     int    `json:"question_pk"`
-	QuestionID     string `json:"question_id"`
-	Input          string `json:"input" binding:"required"`
-	ExpectedOutput string `json:"expected_output" binding:"required"`
-	IsHidden       bool   `json:"is_hidden"`
-}
-
-type BatchTestCaseRequest struct {
-	QuestionPK int `json:"question_pk"`
-	TestCases  []struct {
-		Input          string `json:"input" binding:"required"`
-		ExpectedOutput string `json:"expected_output" binding:"required"`
-		IsHidden       bool   `json:"is_hidden"`
-	} `json:"test_cases" binding:"required,min=1"`
-}
-
 type OSSTestCaseCommitRequest struct {
 	QuestionPK int    `json:"question_pk"`
 	QuestionID string `json:"question_id"`
@@ -103,64 +86,6 @@ func (tc *TestCaseController) GetByQuestion(c *gin.Context) {
 		"question_id":    question.QuestionId,
 		"question_title": question.Title,
 	})
-}
-
-func (tc *TestCaseController) Store(c *gin.Context) {
-	var request TestCaseRequest
-	if err := c.ShouldBindJSON(&request); err != nil {
-		shared.APIError(c, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	testCase, err := tc.service.Create(testcasesvc.TestCaseCreateInput{
-		QuestionPK:     request.QuestionPK,
-		QuestionID:     strings.TrimSpace(request.QuestionID),
-		Input:          request.Input,
-		ExpectedOutput: request.ExpectedOutput,
-		IsHidden:       request.IsHidden,
-	})
-	if errors.Is(err, testcasesvc.ErrTestCaseQuestionNotFound) {
-		shared.APIError(c, http.StatusNotFound, "question not found")
-		return
-	}
-	if err != nil {
-		shared.APIError(c, http.StatusInternalServerError, "create testcase failed")
-		return
-	}
-
-	shared.APIOK(c, http.StatusCreated, "create testcase success", gin.H{"result": testCase})
-}
-
-func (tc *TestCaseController) BatchStore(c *gin.Context) {
-	var request BatchTestCaseRequest
-	if err := c.ShouldBindJSON(&request); err != nil {
-		shared.APIError(c, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	items := make([]testcasesvc.TestCaseBatchItem, 0, len(request.TestCases))
-	for _, item := range request.TestCases {
-		items = append(items, testcasesvc.TestCaseBatchItem{
-			Input:          item.Input,
-			ExpectedOutput: item.ExpectedOutput,
-			IsHidden:       item.IsHidden,
-		})
-	}
-
-	realItems, err := tc.service.BatchCreate(request.QuestionPK, items)
-	if err == nil {
-		shared.APIOK(c, http.StatusCreated, "batch create testcase success", gin.H{
-			"count":  len(realItems),
-			"result": realItems,
-		})
-		return
-	}
-
-	if errors.Is(err, testcasesvc.ErrTestCaseQuestionNotFound) {
-		shared.APIError(c, http.StatusNotFound, "question not found")
-		return
-	}
-	shared.APIError(c, http.StatusInternalServerError, "batch create testcase failed")
 }
 
 func (tc *TestCaseController) OSSCommit(c *gin.Context) {
@@ -233,25 +158,42 @@ func (tc *TestCaseController) Update(c *gin.Context) {
 		return
 	}
 
-	var request TestCaseRequest
+	var request OSSTestCaseCommitRequest
 	if err := c.ShouldBindJSON(&request); err != nil {
 		shared.APIError(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	testCase, err := tc.service.Update(uint(id), testcasesvc.TestCaseCreateInput{
-		QuestionPK:     request.QuestionPK,
-		QuestionID:     strings.TrimSpace(request.QuestionID),
-		Input:          request.Input,
-		ExpectedOutput: request.ExpectedOutput,
-		IsHidden:       request.IsHidden,
+	bucket := config.GlobalConfig.OSS.BucketName
+	if bucket == "" {
+		bucket = "patreon-oj-cases"
+	}
+
+	testCase, err := tc.service.UpdateOSS(context.Background(), bucket, uint(id), testcasesvc.TestCaseOSSCommitInput{
+		QuestionPK: request.QuestionPK,
+		QuestionID: strings.TrimSpace(request.QuestionID),
+		InputKey:   request.InputKey,
+		OutputKey:  request.OutputKey,
+		IsHidden:   request.IsHidden,
 	})
 	if errors.Is(err, testcasesvc.ErrTestCaseNotFound) {
 		shared.APIError(c, http.StatusNotFound, "testcase not found")
 		return
 	}
+	if errors.Is(err, testcasesvc.ErrTestCaseOSSUnavailable) {
+		shared.APIError(c, http.StatusInternalServerError, "oss unavailable")
+		return
+	}
 	if errors.Is(err, testcasesvc.ErrTestCaseQuestionNotFound) {
 		shared.APIError(c, http.StatusNotFound, "question not found")
+		return
+	}
+	if errors.Is(err, testcasesvc.ErrTestCaseInputKeyInvalid) {
+		shared.APIError(c, http.StatusBadRequest, "invalid input_key: "+err.Error())
+		return
+	}
+	if errors.Is(err, testcasesvc.ErrTestCaseOutputKeyInvalid) {
+		shared.APIError(c, http.StatusBadRequest, "invalid output_key: "+err.Error())
 		return
 	}
 	if err != nil {
@@ -281,3 +223,4 @@ func (tc *TestCaseController) Delete(c *gin.Context) {
 
 	shared.APIOK(c, http.StatusOK, "delete testcase success", gin.H{"message": "ok"})
 }
+

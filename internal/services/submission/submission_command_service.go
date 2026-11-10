@@ -119,7 +119,7 @@ func (s *SubmissionCommandService) BuildSubmissionResult(submissionID string) (m
 			response["pass_rate"] = 0.0
 			response["total_cases"] = 0
 			response["passed_cases"] = 0
-			response["message"] = "璇勬祴瀹屾垚浣嗘棤娴嬭瘯缁撴灉"
+			response["message"] = "评测完成，但未返回测试用例结果"
 			return response, nil
 		}
 
@@ -135,7 +135,7 @@ func (s *SubmissionCommandService) BuildSubmissionResult(submissionID string) (m
 		response["passed_cases"] = passed
 	case "processing":
 		response["results"] = []models.TestCaseResult{}
-		response["message"] = "code is being judged, please retry later"
+		response["message"] = "代码正在评测中，请稍后重试"
 	case "error":
 		response["results"] = []models.TestCaseResult{}
 		response["error_code"] = submission.ErrorCode
@@ -143,7 +143,7 @@ func (s *SubmissionCommandService) BuildSubmissionResult(submissionID string) (m
 		response["message"] = friendlySubmissionErrorMessage(submission.ErrorCode)
 	default:
 		response["results"] = []models.TestCaseResult{}
-		response["message"] = "浠ｇ爜宸叉彁浜わ紝绛夊緟璇勬祴"
+		response["message"] = "未知提交状态"
 	}
 
 	return response, nil
@@ -168,19 +168,19 @@ func parseSubmissionResults(resultsStr string) []models.TestCaseResult {
 func friendlySubmissionErrorMessage(errorCode string) string {
 	switch errorCode {
 	case "E001":
-		return "question configuration error: missing test cases"
+		return "题目配置异常：缺少可用测试用例"
 	case "E002":
-		return "compilation failed, please check syntax"
+		return "编译失败，请检查代码语法"
 	case "E003":
-		return "time limit exceeded, please optimize algorithm"
+		return "超出时间限制，请优化算法"
 	case "E004":
-		return "memory limit exceeded, please optimize memory usage"
+		return "超出内存限制，请优化内存使用"
 	case "E005":
-		return "network error, please retry later"
+		return "评测服务不可用，请稍后重试"
 	case "E999":
-		return "internal system error"
+		return "系统内部错误"
 	default:
-		return "unknown error"
+		return "未知错误"
 	}
 }
 
@@ -190,17 +190,38 @@ func EnsureSubmissionErrorCode(err error) string {
 	}
 	msg := strings.ToLower(err.Error())
 	switch {
-	case strings.Contains(msg, "娴嬭瘯鐢ㄤ緥"), strings.Contains(msg, "test case"):
+	case containsAny(msg,
+		"test case", "testcase", "testcases",
+		"question has no available testcases",
+		"missing test cases", "testcase key is empty",
+		"testcase record is not oss-based",
+		"oss is not configured",
+		"read testcase input failed",
+		"read testcase output failed",
+	):
 		return "E001"
-	case strings.Contains(msg, "缂栬瘧"), strings.Contains(msg, "compile"):
+	case containsAny(msg, "compile", "compilation failed", "compile error"):
 		return "E002"
-	case strings.Contains(msg, "瓒呮椂"), strings.Contains(msg, "timeout"), strings.Contains(msg, "time limit"):
+	case containsAny(msg, "timeout", "time limit exceeded", "time limit"):
 		return "E003"
-	case strings.Contains(msg, "鍐呭瓨"), strings.Contains(msg, "memory"):
+	case containsAny(msg, "memory limit exceeded", "memory exceeded", "out of memory", "memory"):
 		return "E004"
-	case strings.Contains(msg, "缃戠粶"), strings.Contains(msg, "network"):
+	case containsAny(msg,
+		"network", "dial tcp", "connection refused", "no such host",
+		"go-judge api error", "bad gateway", "service unavailable",
+		"404", "502", "503", "504",
+	):
 		return "E005"
 	default:
 		return "E999"
 	}
+}
+
+func containsAny(msg string, terms ...string) bool {
+	for _, t := range terms {
+		if strings.Contains(msg, t) {
+			return true
+		}
+	}
+	return false
 }

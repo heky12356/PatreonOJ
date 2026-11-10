@@ -26,7 +26,7 @@ func InitDB() error {
 	case "mysql":
 		dsn := config.GlobalConfig.GetDatabaseDSN()
 		dialector = mysql.Open(dsn)
-		log.Printf("使用MySQL数据库，连接字符串: %s", maskPassword(dsn))
+		log.Printf("使用MySQL数据库，连接字符串: %s", dsn)
 	case "sqlite":
 		dbPath := config.GlobalConfig.GetDatabaseDSN()
 		// 确保SQLite数据库目录存在
@@ -75,12 +75,6 @@ func ensureDir(dir string) error {
 	return os.MkdirAll(dir, 0o755)
 }
 
-// maskPassword 隐藏连接字符串中的密码
-func maskPassword(dsn string) string {
-	// 简单的密码隐藏逻辑，实际项目中可以使用更复杂的方法
-	return "***masked***"
-}
-
 // AutoMigrate 自动迁移数据库表结构
 func AutoMigrate() error {
 	if DB == nil {
@@ -103,6 +97,7 @@ func AutoMigrate() error {
 		&UserSolvedQuestion{},
 		&UserSkillMastery{},
 		&OjOverView{},
+		&Session{},
 		// 如果有其他模型，在这里添加
 	)
 	if err != nil {

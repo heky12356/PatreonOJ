@@ -3,6 +3,7 @@ package auth
 import (
 	"errors"
 	"net/http"
+	"time"
 
 	"patreonoj/internal/controllers/shared"
 	authsvc "patreonoj/internal/services/auth"
@@ -33,10 +34,6 @@ type RegisterRequest struct {
 	Password string `json:"password" binding:"required"`
 }
 
-type LogoutRequest struct {
-	UserID int `json:"user_id" binding:"required"`
-}
-
 func (ac *AuthController) Login(c *gin.Context) {
 	var loginReq LoginRequest
 	if err := c.ShouldBindJSON(&loginReq); err != nil {
@@ -57,6 +54,22 @@ func (ac *AuthController) Login(c *gin.Context) {
 		shared.APIError(c, http.StatusInternalServerError, "login failed")
 		return
 	}
+
+	c.SetSameSite(http.SameSiteLaxMode)
+	maxAge := int(time.Until(result.ExpiresAt).Seconds())
+	if maxAge < 0 {
+		maxAge = 0
+	}
+
+	c.SetCookie(
+		"session_id",
+		result.SessionID,
+		maxAge,
+		"/",
+		"",
+		false,
+		true,
+	)
 
 	shared.APIOK(c, http.StatusOK, "login success", gin.H{
 		"message":     "login success",
@@ -96,21 +109,19 @@ func (ac *AuthController) Register(c *gin.Context) {
 }
 
 func (ac *AuthController) Logout(c *gin.Context) {
-	var logoutReq LogoutRequest
-	if err := c.ShouldBindJSON(&logoutReq); err != nil {
-		shared.APIError(c, http.StatusBadRequest, err.Error())
+	sessionId, ok := c.Get("sessionId")
+	if !ok {
+		shared.APIError(c, http.StatusForbidden, "未登录？")
 		return
 	}
 
-	err := ac.authService.Logout(logoutReq.UserID)
-	if errors.Is(err, authsvc.ErrAuthUserNotFound) {
-		shared.APIError(c, http.StatusNotFound, "user not found")
-		return
-	}
+	err := ac.authService.Logout(sessionId.(string))
 	if err != nil {
 		shared.APIError(c, http.StatusInternalServerError, "logout failed")
 		return
 	}
 
+	c.SetSameSite(http.SameSiteLaxMode)
+	c.SetCookie("session_id", "", -1, "/", "", false, true)
 	shared.APIOK(c, http.StatusOK, "logout success", gin.H{"message": "logout success"})
 }

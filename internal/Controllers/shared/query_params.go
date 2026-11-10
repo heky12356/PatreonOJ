@@ -16,7 +16,7 @@ func ParsePositiveIntQuery(c *gin.Context, key string, defaultValue int) (int, e
 
 	value, err := strconv.Atoi(raw)
 	if err != nil || value <= 0 {
-		return 0, fmt.Errorf("%s 蹇呴』鏄鏁存暟", key)
+		return 0, fmt.Errorf("%s 参数错误", key)
 	}
 	return value, nil
 }

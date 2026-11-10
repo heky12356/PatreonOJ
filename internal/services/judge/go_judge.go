@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"strings"
 	"time"
 
 	"patreonoj/internal/models"
@@ -349,6 +350,26 @@ func (c *GoJudgeClient) doRequest(body interface{}) ([]CmdResponse, error) {
 
 	if resp.StatusCode != http.StatusOK {
 		bodyBytes, _ := ioutil.ReadAll(resp.Body)
+		if fallbackURL, ok := fallbackGoJudgeURL(c.APIURL, resp.StatusCode); ok {
+			retryReq, err := http.NewRequest("POST", fallbackURL, bytes.NewBuffer(jsonBody))
+			if err == nil {
+				retryReq.Header.Set("Content-Type", "application/json")
+				retryResp, retryErr := c.HTTPClient.Do(retryReq)
+				if retryErr == nil {
+					defer retryResp.Body.Close()
+					if retryResp.StatusCode == http.StatusOK {
+						var retryResults []CmdResponse
+						if err := json.NewDecoder(retryResp.Body).Decode(&retryResults); err != nil {
+							return nil, err
+						}
+						return retryResults, nil
+					}
+					retryBody, _ := ioutil.ReadAll(retryResp.Body)
+					return nil, fmt.Errorf("go-judge api error: %d - %s (retry %s => %d - %s)", resp.StatusCode, string(bodyBytes), fallbackURL, retryResp.StatusCode, string(retryBody))
+				}
+				return nil, fmt.Errorf("go-judge api error: %d - %s (retry %s failed: %v)", resp.StatusCode, string(bodyBytes), fallbackURL, retryErr)
+			}
+		}
 		return nil, fmt.Errorf("go-judge api error: %d - %s", resp.StatusCode, string(bodyBytes))
 	}
 
@@ -359,6 +380,20 @@ func (c *GoJudgeClient) doRequest(body interface{}) ([]CmdResponse, error) {
 	}
 
 	return results, nil
+}
+
+func fallbackGoJudgeURL(apiURL string, statusCode int) (string, bool) {
+	if statusCode != http.StatusNotFound {
+		return "", false
+	}
+	trimmed := strings.TrimSpace(apiURL)
+	if trimmed == "" {
+		return "", false
+	}
+	if strings.HasSuffix(trimmed, "/run") {
+		return strings.TrimSuffix(trimmed, "/run"), true
+	}
+	return "", false
 }
 
 func parseResult(resp CmdResponse, input string) models.TestCaseResult {

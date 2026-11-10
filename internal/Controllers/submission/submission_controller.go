@@ -52,7 +52,7 @@ func NewSubmissionController(db *gorm.DB, ossClient *oss.OSS) *SubmissionControl
 }
 
 type SubmitRequest struct {
-	UserID     string `json:"user_id" binding:"required"`
+	// UserID     string `json:"user_id" binding:"required"` 不使用前端发的id而是通过c.get拿到的cookie中解析的user的id
 	QuestionPK int    `json:"question_pk"`
 	QuestionID string `json:"question_id"`
 	Code       string `json:"code" binding:"required"`
@@ -105,6 +105,7 @@ func (sc *SubmissionController) consumeSubmissions() {
 }
 
 func (sc *SubmissionController) SubmitCode(c *gin.Context) {
+	user, _ := c.Get("currentUser")
 	var submitRequest SubmitRequest
 	if err := c.ShouldBindJSON(&submitRequest); err != nil {
 		shared.APIError(c, http.StatusBadRequest, err.Error())
@@ -116,9 +117,9 @@ func (sc *SubmissionController) SubmitCode(c *gin.Context) {
 		err    error
 	)
 	if submitRequest.QuestionPK > 0 {
-		result, err = sc.commandService.CreateSubmission(submitRequest.UserID, submitRequest.QuestionPK, submitRequest.Code)
+		result, err = sc.commandService.CreateSubmission(strconv.Itoa(user.(models.User).Id), submitRequest.QuestionPK, submitRequest.Code)
 	} else if qid := strings.TrimSpace(submitRequest.QuestionID); qid != "" {
-		result, err = sc.commandService.CreateSubmissionByQuestionID(submitRequest.UserID, qid, submitRequest.Code)
+		result, err = sc.commandService.CreateSubmissionByQuestionID(strconv.Itoa(user.(models.User).Id), qid, submitRequest.Code)
 	} else {
 		shared.APIError(c, http.StatusBadRequest, "question_pk is required")
 		return
@@ -207,11 +208,9 @@ func (sc *SubmissionController) ListProblemSubmissions(c *gin.Context) {
 }
 
 func (sc *SubmissionController) ListUserSubmissions(c *gin.Context) {
-	opUUID, ok := shared.RequireOperatorUUID(sc.db, c)
-	if !ok {
-		return
-	}
-	isAdmin := util.UserInstance.HasPermission(opUUID, "admin")
+	user, _ := c.Get("currentUser")
+	opUUID := user.(models.User).UUID
+	isAdmin := util.UserInstance.HasPermission(user.(models.User), "admin")
 
 	targetUUID := strings.TrimSpace(c.Param("user_id"))
 	if targetUUID == "" {

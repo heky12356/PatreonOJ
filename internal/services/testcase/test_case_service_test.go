@@ -6,12 +6,30 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"patreonoj/internal/models"
 
+	"github.com/minio/minio-go/v7"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
+
+type fakeObjectStore struct {
+	files map[string]int64
+}
+
+func (f *fakeObjectStore) StatObject(_ context.Context, _ string, key string) (minio.ObjectInfo, error) {
+	size, ok := f.files[key]
+	if !ok {
+		return minio.ObjectInfo{}, errors.New("not found")
+	}
+	return minio.ObjectInfo{
+		Key:          key,
+		Size:         size,
+		LastModified: time.Now(),
+	}, nil
+}
 
 func newTestCaseServiceDB(t *testing.T) *gorm.DB {
 	t.Helper()
@@ -41,19 +59,23 @@ func seedTestCaseQuestion(t *testing.T, db *gorm.DB, number int, title string) m
 	return q
 }
 
-func TestTestCaseService_CreateAndGetByQuestionID(t *testing.T) {
+func TestTestCaseService_CommitAndGetByQuestionID(t *testing.T) {
 	db := newTestCaseServiceDB(t)
 	seedTestCaseQuestion(t, db, 1001, "A")
-	svc := NewTestCaseService(db, nil)
+	store := &fakeObjectStore{files: map[string]int64{
+		"problems/1001/1.in":  12,
+		"problems/1001/1.out": 8,
+	}}
+	svc := NewTestCaseService(db, store)
 
-	created, err := svc.Create(TestCaseCreateInput{
-		QuestionPK:     1001,
-		Input:          "1 2",
-		ExpectedOutput: "3",
-		IsHidden:       false,
+	created, err := svc.CommitOSS(context.Background(), "bucket", TestCaseOSSCommitInput{
+		QuestionPK: 1001,
+		InputKey:   "problems/1001/1.in",
+		OutputKey:  "problems/1001/1.out",
+		IsHidden:   false,
 	})
 	if err != nil {
-		t.Fatalf("Create failed: %v", err)
+		t.Fatalf("CommitOSS failed: %v", err)
 	}
 
 	list, question, err := svc.GetByQuestionID(1001)
@@ -61,10 +83,13 @@ func TestTestCaseService_CreateAndGetByQuestionID(t *testing.T) {
 		t.Fatalf("GetByQuestionID failed: %v", err)
 	}
 	if question.Id != 1001 {
-		t.Fatalf("unexpected question number: %d", question.Id)
+		t.Fatalf("unexpected question id: %d", question.Id)
 	}
 	if len(list) != 1 || list[0].ID != created.ID {
 		t.Fatalf("unexpected list result: %+v", list)
+	}
+	if list[0].InputKey == "" || list[0].OutputKey == "" {
+		t.Fatalf("expected oss keys, got %+v", list[0])
 	}
 }
 
@@ -83,28 +108,34 @@ func TestTestCaseService_UpdateDeleteFlow(t *testing.T) {
 	db := newTestCaseServiceDB(t)
 	seedTestCaseQuestion(t, db, 1001, "A")
 	seedTestCaseQuestion(t, db, 1002, "B")
-	svc := NewTestCaseService(db, nil)
+	store := &fakeObjectStore{files: map[string]int64{
+		"problems/1001/1.in":  12,
+		"problems/1001/1.out": 8,
+		"problems/1002/2.in":  20,
+		"problems/1002/2.out": 16,
+	}}
+	svc := NewTestCaseService(db, store)
 
-	created, err := svc.Create(TestCaseCreateInput{
-		QuestionPK:     1001,
-		Input:          "1",
-		ExpectedOutput: "1",
-		IsHidden:       false,
+	created, err := svc.CommitOSS(context.Background(), "bucket", TestCaseOSSCommitInput{
+		QuestionPK: 1001,
+		InputKey:   "problems/1001/1.in",
+		OutputKey:  "problems/1001/1.out",
+		IsHidden:   false,
 	})
 	if err != nil {
-		t.Fatalf("Create failed: %v", err)
+		t.Fatalf("CommitOSS failed: %v", err)
 	}
 
-	updated, err := svc.Update(created.ID, TestCaseCreateInput{
-		QuestionPK:     1002,
-		Input:          "2",
-		ExpectedOutput: "2",
-		IsHidden:       true,
+	updated, err := svc.UpdateOSS(context.Background(), "bucket", created.ID, TestCaseOSSCommitInput{
+		QuestionPK: 1002,
+		InputKey:   "problems/1002/2.in",
+		OutputKey:  "problems/1002/2.out",
+		IsHidden:   true,
 	})
 	if err != nil {
-		t.Fatalf("Update failed: %v", err)
+		t.Fatalf("UpdateOSS failed: %v", err)
 	}
-	if updated.Input != "2" || updated.IsHidden != true {
+	if updated.QuestionID != 1002 || updated.IsHidden != true {
 		t.Fatalf("unexpected updated testcase: %+v", updated)
 	}
 
@@ -130,5 +161,24 @@ func TestTestCaseService_CommitOSSWithoutClient(t *testing.T) {
 	})
 	if !errors.Is(err, ErrTestCaseOSSUnavailable) {
 		t.Fatalf("expected ErrTestCaseOSSUnavailable, got %v", err)
+	}
+}
+
+func TestTestCaseService_CommitOSSInvalidPrefix(t *testing.T) {
+	db := newTestCaseServiceDB(t)
+	seedTestCaseQuestion(t, db, 1001, "A")
+	store := &fakeObjectStore{files: map[string]int64{
+		"problems/q-1001/1.in":  12,
+		"problems/q-1001/1.out": 8,
+	}}
+	svc := NewTestCaseService(db, store)
+
+	_, err := svc.CommitOSS(context.Background(), "bucket", TestCaseOSSCommitInput{
+		QuestionPK: 1001,
+		InputKey:   "problems/q-1001/1.in",
+		OutputKey:  "problems/q-1001/1.out",
+	})
+	if !errors.Is(err, ErrTestCaseInputKeyInvalid) {
+		t.Fatalf("expected ErrTestCaseInputKeyInvalid, got %v", err)
 	}
 }

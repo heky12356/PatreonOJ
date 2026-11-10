@@ -1,22 +1,116 @@
 package assessment
 
 import (
-	"context"
+	"errors"
 	"fmt"
+	"sort"
 	"strings"
+	"unicode"
 
 	"patreonoj/internal/models"
 
 	"gorm.io/gorm"
 )
 
-// AssessmentService updates user mastery in MySQL.
+const masteryLearningRate = 0.2
+
+// AssessmentService updates user skill mastery from judging results.
 type AssessmentService struct {
 	DB *gorm.DB
 }
 
 func NewAssessmentService(db *gorm.DB) *AssessmentService {
 	return &AssessmentService{DB: db}
+}
+
+// UpdateUserMasteryBasedOnResult updates skill mastery after an accepted submission.
+func (s *AssessmentService) UpdateUserMasteryBasedOnResult(userID string, questionID int, isCorrect bool) error {
+	userID = strings.TrimSpace(userID)
+	if !isCorrect || userID == "" || questionID <= 0 {
+		return nil
+	}
+	if s == nil || s.DB == nil {
+		return errors.New("assessment database is not initialized")
+	}
+
+	var question models.Question
+	if err := s.DB.Where("id = ?", questionID).First(&question).Error; err != nil {
+		return fmt.Errorf("load question for mastery update: %w", err)
+	}
+
+	skills := parseSkillKeys(question.Tags)
+	if len(skills) == 0 {
+		return nil
+	}
+
+	factor := difficultyFactor(question.Difficulty)
+	return s.DB.Transaction(func(tx *gorm.DB) error {
+		for _, skill := range skills {
+			if err := updateSkillMastery(tx, userID, skill, factor); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func updateSkillMastery(tx *gorm.DB, userID string, skillKey string, difficultyFactor float64) error {
+	var mastery models.UserSkillMastery
+	err := tx.Where("user_id = ? AND skill_key = ?", userID, skillKey).First(&mastery).Error
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
+	}
+
+	current := 0.0
+	if err == nil {
+		current = mastery.Mastery
+	}
+	next := nextMastery(current, difficultyFactor)
+
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		mastery = models.UserSkillMastery{
+			UserID:   userID,
+			SkillKey: skillKey,
+			Mastery:  next,
+		}
+		return tx.Create(&mastery).Error
+	}
+
+	return tx.Model(&mastery).Update("mastery", next).Error
+}
+
+func nextMastery(current float64, difficultyFactor float64) float64 {
+	current = clamp01(current)
+	difficultyFactor = maxFloat(difficultyFactor, 0)
+	next := current + masteryLearningRate*(1-current)*difficultyFactor
+	return clamp01(next)
+}
+
+func parseSkillKeys(tags string) []string {
+	fields := strings.FieldsFunc(tags, func(r rune) bool {
+		switch r {
+		case ',', '，', ';', '；', '|', '/', '\\':
+			return true
+		default:
+			return unicode.IsSpace(r)
+		}
+	})
+
+	seen := make(map[string]struct{}, len(fields))
+	out := make([]string, 0, len(fields))
+	for _, field := range fields {
+		key := normalizeSkillKey(field)
+		if key == "" {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, key)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func normalizeSkillKey(name string) string {
@@ -26,86 +120,32 @@ func normalizeSkillKey(name string) string {
 	return strings.ToLower(name)
 }
 
-// UpdateUserMasteryBasedOnResult updates mastery from AC submissions.
-func (s *AssessmentService) UpdateUserMasteryBasedOnResult(userId string, questionId int, isCorrect bool) error {
-	var question models.Question
-	if err := s.DB.Where("id = ?", questionId).First(&question).Error; err != nil {
-		return fmt.Errorf("question not found: %w", err)
-	}
-
-	skills := strings.Split(question.Tags, ",")
-
-	for _, skillKey := range skills {
-		skillKey = normalizeSkillKey(skillKey)
-		if skillKey == "" {
-			continue
-		}
-
-		currentMastery, err := s.getCurrentMastery(userId, skillKey)
-		if err != nil {
-			continue
-		}
-
-		if isCorrect {
-			diffFactor := getDifficultyFactor(question.Difficulty)
-			learningRate := 0.2
-			delta := learningRate * (1.0 - currentMastery) * diffFactor
-			newMastery := currentMastery + delta
-			if newMastery > 1.0 {
-				newMastery = 1.0
-			}
-
-			if err := s.updateMastery(context.Background(), userId, skillKey, newMastery); err != nil {
-				fmt.Printf("update mastery failed: %v\n", err)
-			}
-		}
-	}
-
-	return nil
-}
-
-func (s *AssessmentService) getCurrentMastery(userId string, skillKey string) (float64, error) {
-	var record models.UserSkillMastery
-	err := s.DB.Where("user_id = ? AND skill_key = ?", userId, skillKey).First(&record).Error
-	if err != nil {
-		if err == gorm.ErrRecordNotFound {
-			return 0.0, nil
-		}
-		return 0.0, err
-	}
-	return record.Mastery, nil
-}
-
-func (s *AssessmentService) updateMastery(_ context.Context, userId string, skillKey string, mastery float64) error {
-	var record models.UserSkillMastery
-	err := s.DB.Where("user_id = ? AND skill_key = ?", userId, skillKey).First(&record).Error
-	if err == gorm.ErrRecordNotFound {
-		record = models.UserSkillMastery{
-			UserID:   userId,
-			SkillKey: skillKey,
-			Mastery:  mastery,
-		}
-		if err := s.DB.Create(&record).Error; err != nil {
-			return err
-		}
-	} else {
-		record.Mastery = mastery
-		if err := s.DB.Save(&record).Error; err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func getDifficultyFactor(diff string) float64 {
-	switch diff {
-	case "简单", "Easy":
+func difficultyFactor(difficulty string) float64 {
+	switch strings.ToLower(strings.TrimSpace(difficulty)) {
+	case "简单", "easy", "simple":
 		return 0.5
-	case "中等", "Medium":
+	case "中等", "medium":
 		return 0.8
-	case "困难", "Hard":
+	case "困难", "hard":
 		return 1.2
 	default:
-		return 0.5
+		return 0.6
 	}
+}
+
+func clamp01(v float64) float64 {
+	if v < 0 {
+		return 0
+	}
+	if v > 1 {
+		return 1
+	}
+	return v
+}
+
+func maxFloat(a float64, b float64) float64 {
+	if a > b {
+		return a
+	}
+	return b
 }

@@ -29,20 +29,6 @@ type TestCaseService struct {
 	ossClient testCaseObjectStore
 }
 
-type TestCaseCreateInput struct {
-	QuestionPK     int
-	QuestionID     string
-	Input          string
-	ExpectedOutput string
-	IsHidden       bool
-}
-
-type TestCaseBatchItem struct {
-	Input          string
-	ExpectedOutput string
-	IsHidden       bool
-}
-
 type TestCaseOSSCommitInput struct {
 	QuestionPK int
 	QuestionID string
@@ -85,46 +71,6 @@ func (s *TestCaseService) GetByQuestionID(questionID int) ([]models.TestCase, mo
 	return testCases, question, nil
 }
 
-func (s *TestCaseService) Create(input TestCaseCreateInput) (models.TestCase, error) {
-	question, err := s.resolveQuestion(input.QuestionPK, input.QuestionID)
-	if err != nil {
-		return models.TestCase{}, err
-	}
-
-	testCase := models.TestCase{
-		QuestionID:     question.Id,
-		Input:          input.Input,
-		ExpectedOutput: input.ExpectedOutput,
-		IsHidden:       input.IsHidden,
-	}
-	if err := s.db.Create(&testCase).Error; err != nil {
-		return models.TestCase{}, err
-	}
-	return testCase, nil
-}
-
-func (s *TestCaseService) BatchCreate(questionID int, items []TestCaseBatchItem) ([]models.TestCase, error) {
-	question, err := s.getQuestionByID(questionID)
-	if err != nil {
-		return nil, err
-	}
-
-	testCases := make([]models.TestCase, 0, len(items))
-	for _, item := range items {
-		testCases = append(testCases, models.TestCase{
-			QuestionID:     question.Id,
-			Input:          item.Input,
-			ExpectedOutput: item.ExpectedOutput,
-			IsHidden:       item.IsHidden,
-		})
-	}
-
-	if err := s.db.Create(&testCases).Error; err != nil {
-		return nil, err
-	}
-	return testCases, nil
-}
-
 func (s *TestCaseService) CommitOSS(ctx context.Context, bucket string, input TestCaseOSSCommitInput) (models.TestCase, error) {
 	if s.ossClient == nil {
 		return models.TestCase{}, ErrTestCaseOSSUnavailable
@@ -135,27 +81,54 @@ func (s *TestCaseService) CommitOSS(ctx context.Context, bucket string, input Te
 		return models.TestCase{}, err
 	}
 
-	inInfo, err := s.ossClient.StatObject(ctx, bucket, input.InputKey)
+	inInfo, outInfo, err := s.validateObjectKeys(ctx, bucket, question.Id, input.InputKey, input.OutputKey)
 	if err != nil {
-		return models.TestCase{}, fmt.Errorf("%w: %v", ErrTestCaseInputKeyInvalid, err)
-	}
-	outInfo, err := s.ossClient.StatObject(ctx, bucket, input.OutputKey)
-	if err != nil {
-		return models.TestCase{}, fmt.Errorf("%w: %v", ErrTestCaseOutputKeyInvalid, err)
+		return models.TestCase{}, err
 	}
 
 	testCase := models.TestCase{
-		QuestionID:     question.Id,
-		InputKey:       input.InputKey,
-		OutputKey:      input.OutputKey,
-		InputSize:      inInfo.Size,
-		OutputSize:     outInfo.Size,
-		IsHidden:       input.IsHidden,
-		Input:          "",
-		ExpectedOutput: "",
+		QuestionID: question.Id,
+		InputKey:   input.InputKey,
+		OutputKey:  input.OutputKey,
+		InputSize:  inInfo.Size,
+		OutputSize: outInfo.Size,
+		IsHidden:   input.IsHidden,
 	}
 
 	if err := s.db.Create(&testCase).Error; err != nil {
+		return models.TestCase{}, err
+	}
+	return testCase, nil
+}
+
+func (s *TestCaseService) UpdateOSS(ctx context.Context, bucket string, id uint, input TestCaseOSSCommitInput) (models.TestCase, error) {
+	if s.ossClient == nil {
+		return models.TestCase{}, ErrTestCaseOSSUnavailable
+	}
+
+	testCase, err := s.GetByID(id)
+	if err != nil {
+		return models.TestCase{}, err
+	}
+
+	question, err := s.resolveQuestion(input.QuestionPK, input.QuestionID)
+	if err != nil {
+		return models.TestCase{}, err
+	}
+
+	inInfo, outInfo, err := s.validateObjectKeys(ctx, bucket, question.Id, input.InputKey, input.OutputKey)
+	if err != nil {
+		return models.TestCase{}, err
+	}
+
+	testCase.QuestionID = question.Id
+	testCase.InputKey = input.InputKey
+	testCase.OutputKey = input.OutputKey
+	testCase.InputSize = inInfo.Size
+	testCase.OutputSize = outInfo.Size
+	testCase.IsHidden = input.IsHidden
+
+	if err := s.db.Save(&testCase).Error; err != nil {
 		return models.TestCase{}, err
 	}
 	return testCase, nil
@@ -167,28 +140,6 @@ func (s *TestCaseService) GetByID(id uint) (models.TestCase, error) {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return models.TestCase{}, ErrTestCaseNotFound
 		}
-		return models.TestCase{}, err
-	}
-	return testCase, nil
-}
-
-func (s *TestCaseService) Update(id uint, input TestCaseCreateInput) (models.TestCase, error) {
-	testCase, err := s.GetByID(id)
-	if err != nil {
-		return models.TestCase{}, err
-	}
-
-	question, err := s.resolveQuestion(input.QuestionPK, input.QuestionID)
-	if err != nil {
-		return models.TestCase{}, err
-	}
-
-	testCase.QuestionID = question.Id
-	testCase.Input = input.Input
-	testCase.ExpectedOutput = input.ExpectedOutput
-	testCase.IsHidden = input.IsHidden
-
-	if err := s.db.Save(&testCase).Error; err != nil {
 		return models.TestCase{}, err
 	}
 	return testCase, nil
@@ -232,6 +183,37 @@ func (s *TestCaseService) resolveQuestion(questionPK int, questionID string) (mo
 		return s.getQuestionByQuestionID(id)
 	}
 	return models.Question{}, ErrTestCaseQuestionNotFound
+}
+
+func (s *TestCaseService) validateObjectKeys(ctx context.Context, bucket string, questionPK int, inputKey, outputKey string) (minio.ObjectInfo, minio.ObjectInfo, error) {
+	expectedPrefix := fmt.Sprintf("problems/%d/", questionPK)
+	if err := ensureQuestionPrefix(expectedPrefix, inputKey); err != nil {
+		return minio.ObjectInfo{}, minio.ObjectInfo{}, fmt.Errorf("%w: %v", ErrTestCaseInputKeyInvalid, err)
+	}
+	if err := ensureQuestionPrefix(expectedPrefix, outputKey); err != nil {
+		return minio.ObjectInfo{}, minio.ObjectInfo{}, fmt.Errorf("%w: %v", ErrTestCaseOutputKeyInvalid, err)
+	}
+
+	inInfo, err := s.ossClient.StatObject(ctx, bucket, inputKey)
+	if err != nil {
+		return minio.ObjectInfo{}, minio.ObjectInfo{}, fmt.Errorf("%w: %v", ErrTestCaseInputKeyInvalid, err)
+	}
+	outInfo, err := s.ossClient.StatObject(ctx, bucket, outputKey)
+	if err != nil {
+		return minio.ObjectInfo{}, minio.ObjectInfo{}, fmt.Errorf("%w: %v", ErrTestCaseOutputKeyInvalid, err)
+	}
+	return inInfo, outInfo, nil
+}
+
+func ensureQuestionPrefix(expectedPrefix, key string) error {
+	trimmed := strings.TrimLeft(strings.TrimSpace(key), "/")
+	if trimmed == "" {
+		return errors.New("key is empty")
+	}
+	if !strings.HasPrefix(trimmed, expectedPrefix) {
+		return fmt.Errorf("key must start with %q", expectedPrefix)
+	}
+	return nil
 }
 
 func (s *TestCaseService) listByQuery(query *gorm.DB) ([]models.TestCase, error) {

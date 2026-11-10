@@ -2,9 +2,13 @@ package auth
 
 import (
 	"crypto/md5"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"strings"
+	"time"
 
 	"patreonoj/internal/models"
 
@@ -30,6 +34,8 @@ type AuthLoginResult struct {
 	UUID        string
 	Username    string
 	Permissions []string
+	SessionID   string
+	ExpiresAt   time.Time
 }
 
 type AuthRegisterResult struct {
@@ -55,8 +61,25 @@ func (s *AuthService) Login(username, password string) (*AuthLoginResult, error)
 		return nil, result.Error
 	}
 
+	// 检查用户是否有效
 	if user.Status != "" && user.Status != "active" {
 		return nil, ErrAuthUserDisabled
+	}
+
+	// 生成一个session
+	str, _ := NewSessionID()
+
+	expireTime := time.Now().Add(7 * 24 * time.Hour)
+
+	session := models.Session{
+		SessionId: str,
+		UserId:    user.Id,
+		ExpiresAt: &expireTime,
+	}
+	// 将session放入 session数据库里面
+	result = s.db.Create(&session)
+	if result.Error != nil {
+		return nil, result.Error
 	}
 
 	return &AuthLoginResult{
@@ -64,6 +87,8 @@ func (s *AuthService) Login(username, password string) (*AuthLoginResult, error)
 		UUID:        user.UUID,
 		Username:    user.Username,
 		Permissions: strings.Split(user.Permissions, ","),
+		SessionID:   str,
+		ExpiresAt:   expireTime,
 	}, nil
 }
 
@@ -98,18 +123,20 @@ func (s *AuthService) Register(username, password string) (*AuthRegisterResult, 
 	}, nil
 }
 
-func (s *AuthService) Logout(userID int) error {
-	var user models.User
-	result := s.db.First(&user, userID)
+func (s *AuthService) Logout(sessionId string) error {
+	// 查session表 update一下回收时间
+	session := models.Session{}
+	result := s.db.Where("session_id = ?", sessionId).First(&session)
 	if result.Error != nil {
-		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
-			return ErrAuthUserNotFound
-		}
-		return result.Error
+		return fmt.Errorf("查询sessionId错误 %w", result.Error)
 	}
-
-	user.UUID = ""
-	return s.db.Save(&user).Error
+	timeNow := time.Now()
+	session.RevokedAt = &timeNow
+	result = s.db.Save(&session)
+	if result.Error != nil {
+		return fmt.Errorf("保存修改错误 %w", result.Error)
+	}
+	return nil
 }
 
 func (s *AuthService) generateUniqueUUID() (string, error) {
@@ -132,4 +159,13 @@ func md5EncodeAuth(str string) string {
 	h := md5.New()
 	h.Write([]byte(str))
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+// 生成session id
+func NewSessionID() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("生成SessionID失败 %w", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
 }

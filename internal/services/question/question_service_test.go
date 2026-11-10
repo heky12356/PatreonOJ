@@ -40,6 +40,51 @@ func seedQuestionSvc(t *testing.T, db *gorm.DB, number int, title, status string
 	return q
 }
 
+func TestQuestionService_List_SearchByTitleTagsContentAndID(t *testing.T) {
+	db := newQuestionServiceTestDB(t)
+	q1 := seedQuestionSvc(t, db, 1001, "Binary Search", "published")
+	q2 := seedQuestionSvc(t, db, 1002, "Dynamic Programming", "published")
+
+	if err := db.Model(&q1).Updates(map[string]any{
+		"tags":    "array,binary-search",
+		"content": "find target in sorted array",
+	}).Error; err != nil {
+		t.Fatalf("update q1 failed: %v", err)
+	}
+	if err := db.Model(&q2).Updates(map[string]any{
+		"tags":    "dp,knapsack",
+		"content": "optimize transitions",
+	}).Error; err != nil {
+		t.Fatalf("update q2 failed: %v", err)
+	}
+
+	svc := NewQuestionService(db)
+
+	byTag, err := svc.List("binary-search", "", false, 1, 10)
+	if err != nil {
+		t.Fatalf("List by tag failed: %v", err)
+	}
+	if len(byTag.Result) != 1 || byTag.Result[0].Id != q1.Id {
+		t.Fatalf("unexpected tag search result: %+v", byTag.Result)
+	}
+
+	byContent, err := svc.List("transitions", "", false, 1, 10)
+	if err != nil {
+		t.Fatalf("List by content failed: %v", err)
+	}
+	if len(byContent.Result) != 1 || byContent.Result[0].Id != q2.Id {
+		t.Fatalf("unexpected content search result: %+v", byContent.Result)
+	}
+
+	byID, err := svc.List("1001", "", false, 1, 10)
+	if err != nil {
+		t.Fatalf("List by numeric id failed: %v", err)
+	}
+	if len(byID.Result) != 1 || byID.Result[0].Id != q1.Id {
+		t.Fatalf("unexpected id search result: %+v", byID.Result)
+	}
+}
+
 func TestQuestionService_List_AdminAndNonAdmin(t *testing.T) {
 	db := newQuestionServiceTestDB(t)
 	seedQuestionSvc(t, db, 1001, "A", "draft")
@@ -122,7 +167,7 @@ func TestQuestionService_GetAndUpdateByNumber(t *testing.T) {
 func TestQuestionService_DeleteByNumber(t *testing.T) {
 	db := newQuestionServiceTestDB(t)
 	question := seedQuestionSvc(t, db, 1001, "to-del", "published")
-	if err := db.Create(&models.TestCase{QuestionID: question.Id, Input: "1", ExpectedOutput: "1"}).Error; err != nil {
+	if err := db.Create(&models.TestCase{QuestionID: question.Id, InputKey: "in", OutputKey: "out"}).Error; err != nil {
 		t.Fatalf("seed testcase failed: %v", err)
 	}
 	svc := NewQuestionService(db)

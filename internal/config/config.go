@@ -13,7 +13,6 @@ type Config struct {
 	GraphDatabase GraphDatabaseConfig `mapstructure:"graph_database"`
 	Server        ServerConfig        `mapstructure:"server"`
 	Judge         JudgeConfig         `mapstructure:"judge"`
-	Log           LogConfig           `mapstructure:"log"`
 	OSS           OSSConfig           `mapstructure:"oss"`
 	AI            AIConfig            `mapstructure:"ai"`
 }
@@ -84,7 +83,6 @@ type ServerConfig struct {
 // JudgeConfig 评测服务配置
 type JudgeConfig struct {
 	Mode      string           `mapstructure:"mode"`
-	APIURL    string           `mapstructure:"api_url"`
 	Timeout   int              `mapstructure:"timeout"`
 	QueueSize int              `mapstructure:"queue_size"`
 	Local     LocalJudgeConfig `mapstructure:"local"`
@@ -114,14 +112,6 @@ type LocalJudgeConfig struct {
 	DockerImageCpp    string `mapstructure:"docker_image_cpp"`
 	DockerImagePython string `mapstructure:"docker_image_python"`
 	DockerImageJava   string `mapstructure:"docker_image_java"`
-}
-
-// LogConfig 日志配置
-type LogConfig struct {
-	Level    string `mapstructure:"level"`
-	Format   string `mapstructure:"format"`
-	Output   string `mapstructure:"output"`
-	FilePath string `mapstructure:"file_path"`
 }
 
 var GlobalConfig *Config
@@ -185,11 +175,6 @@ func setDefaults() {
 
 	// Oss默认公开读取前缀
 	viper.SetDefault("oss.public_read_prefixes", []string{})
-
-	// 日志默认配置
-	viper.SetDefault("log.level", "info")
-	viper.SetDefault("log.format", "json")
-	viper.SetDefault("log.output", "stdout")
 
 	// 图数据库默认配置
 	viper.SetDefault("graph_database.neo4j.uri", "bolt://localhost:7687")

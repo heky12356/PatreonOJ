@@ -33,9 +33,9 @@ func main() {
 	}
 
 	// 自动迁移数据库表
-	if err := models.AutoMigrate(); err != nil {
-		log.Fatalf("数据库表迁移失败: %v", err)
-	}
+	// if err := models.AutoMigrate(); err != nil {
+	// 	log.Fatalf("数据库表迁移失败: %v", err)
+	// }
 
 	// 初始化OJ首页数据
 	if err := models.InitOjOverView(); err != nil {
