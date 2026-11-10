@@ -32,6 +32,58 @@ func newLearningServiceTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
+func TestDenseQuestionGraphAvoidsSQLVariableLimit(t *testing.T) {
+	db := newLearningServiceTestDB(t)
+	questions := make([]models.Question, 130)
+	for i := range questions {
+		questions[i] = models.Question{QuestionId: fmt.Sprintf("dense-%d", i), Title: "Dense", Tags: "array", Status: "published"}
+	}
+	if err := db.CreateInBatches(questions, 100).Error; err != nil {
+		t.Fatal(err)
+	}
+	edges := make([]models.QuestionRelationEdge, 0, 130*129)
+	for i := range questions {
+		for j := range questions {
+			if i != j {
+				edges = append(edges, models.QuestionRelationEdge{FromQuestionID: questions[i].QuestionId, ToQuestionID: questions[j].QuestionId, EdgeType: models.QuestionRelationEdgeTypeSimilar})
+			}
+		}
+	}
+	if err := db.CreateInBatches(edges, 500).Error; err != nil {
+		t.Fatal(err)
+	}
+	graph, err := NewLearningService(db).BuildQuestionGraph(questions[0].Id, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(graph.Nodes) != 130 || len(graph.Edges) != 130*129 || graph.Truncated {
+		t.Fatalf("incomplete graph: nodes=%d edges=%d truncated=%v", len(graph.Nodes), len(graph.Edges), graph.Truncated)
+	}
+}
+
+func TestQuestionGraphBoundsNodeCount(t *testing.T) {
+	db := newLearningServiceTestDB(t)
+	questions := make([]models.Question, 270)
+	for i := range questions {
+		questions[i] = models.Question{QuestionId: fmt.Sprintf("star-%d", i), Title: "Star", Status: "published"}
+	}
+	if err := db.CreateInBatches(questions, 100).Error; err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i < len(questions); i++ {
+		if err := db.Create(&models.QuestionRelationEdge{FromQuestionID: questions[0].QuestionId, ToQuestionID: questions[i].QuestionId, EdgeType: models.QuestionRelationEdgeTypeSimilar}).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	graph, err := NewLearningService(db).BuildQuestionGraph(questions[0].Id, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(graph.Nodes) > 256 || !graph.Truncated {
+		t.Fatalf("graph not bounded: %d truncated=%v", len(graph.Nodes), graph.Truncated)
+	}
+}
+
 func seedLearningUser(t *testing.T, db *gorm.DB, uuid string) {
 	t.Helper()
 	user := models.User{

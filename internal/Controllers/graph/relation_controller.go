@@ -3,7 +3,7 @@ package graph
 import (
 	"net/http"
 
-	"patreonoj/internal/controllers/shared"
+	"patreonoj/internal/Controllers/shared"
 	graphsvc "patreonoj/internal/services/graph"
 
 	"github.com/gin-gonic/gin"

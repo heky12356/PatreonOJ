@@ -11,8 +11,9 @@ import (
 )
 
 var (
-	ErrLearningUserNotFound     = errors.New("user not found")
-	ErrLearningQuestionNotFound = errors.New("question not found")
+	ErrLearningUserNotFound      = errors.New("user not found")
+	ErrLearningQuestionNotFound  = errors.New("question not found")
+	ErrLearningAmbiguousQuestion = errors.New("question_id is ambiguous for graph relationships")
 )
 
 type LearningState string
@@ -93,6 +94,7 @@ type QuestionGraphTree struct {
 }
 
 type QuestionGraphResult struct {
+	Truncated      bool                `json:"truncated"`
 	RootQuestionID string              `json:"root_question_id"`
 	RootQuestionPK int                 `json:"root_question_pk"`
 	Nodes          []QuestionGraphNode `json:"nodes"`
@@ -101,11 +103,30 @@ type QuestionGraphResult struct {
 }
 
 type LearningService struct {
-	db *gorm.DB
+	db            *gorm.DB
+	includeDrafts bool
 }
 
 func NewLearningService(db *gorm.DB) *LearningService {
 	return &LearningService{db: db}
+}
+
+// WithDrafts returns a request-local service; shared controller state is immutable.
+func (s *LearningService) WithDrafts(allow bool) *LearningService {
+	return &LearningService{db: s.db, includeDrafts: allow}
+}
+
+func (s *LearningService) visibleQuestions() *gorm.DB {
+	query := s.db.Model(&models.Question{})
+	if !s.includeDrafts {
+		query = query.Where("status = ?", "published")
+	}
+	return query
+}
+
+func (s *LearningService) uniqueVisibleQuestions() *gorm.DB {
+	unique := s.db.Model(&models.Question{}).Select("question_id").Group("question_id").Having("COUNT(*) = 1")
+	return s.visibleQuestions().Where("question_id IN (?)", unique)
 }
 
 func (s *LearningService) BuildQuestionGraph(questionPK int, depth int) (*QuestionGraphResult, error) {
@@ -117,7 +138,7 @@ func (s *LearningService) BuildQuestionGraph(questionPK int, depth int) (*Questi
 	}
 
 	var root models.Question
-	if err := s.db.Where("id = ?", questionPK).First(&root).Error; err != nil {
+	if err := s.visibleQuestions().Where("id = ?", questionPK).First(&root).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrLearningQuestionNotFound
 		}
@@ -125,19 +146,69 @@ func (s *LearningService) BuildQuestionGraph(questionPK int, depth int) (*Questi
 	}
 
 	rootID := strings.TrimSpace(root.QuestionId)
+	var sameID int64
+	if err := s.db.Model(&models.Question{}).Where("question_id = ?", root.QuestionId).Count(&sameID).Error; err != nil {
+		return nil, err
+	}
+	if sameID != 1 {
+		return nil, ErrLearningAmbiguousQuestion
+	}
 	discovered := map[string]struct{}{rootID: {}}
 	frontier := []string{rootID}
 	edgeSet := make(map[string]models.QuestionRelationEdge)
+	const maxGraphNodes, maxGraphEdges = 256, 20000
+	truncated := false
 
 	for i := 0; i < depth && len(frontier) > 0; i++ {
 		var edges []models.QuestionRelationEdge
-		if err := s.db.Where("from_question_id IN ? OR to_question_id IN ?", frontier, frontier).Find(&edges).Error; err != nil {
+		if err := s.db.Where("from_question_id IN ? OR to_question_id IN ?", frontier, frontier).Order("id ASC").Limit(maxGraphEdges + 1).Find(&edges).Error; err != nil {
 			return nil, err
+		}
+		if len(edges) > maxGraphEdges {
+			truncated = true
+			edges = edges[:maxGraphEdges]
+		}
+		endpoints := make(map[string]struct{})
+		for _, edge := range edges {
+			endpoints[edge.FromQuestionID] = struct{}{}
+			endpoints[edge.ToQuestionID] = struct{}{}
+		}
+		endpointIDs := mapKeys(endpoints)
+		var visibleIDs []string
+		for start := 0; start < len(endpointIDs); start += 500 {
+			var batch []string
+			if err := s.uniqueVisibleQuestions().Where("question_id IN ?", endpointIDs[start:min(start+500, len(endpointIDs))]).Pluck("question_id", &batch).Error; err != nil {
+				return nil, err
+			}
+			visibleIDs = append(visibleIDs, batch...)
+		}
+		visible := make(map[string]bool, len(visibleIDs))
+		for _, id := range visibleIDs {
+			visible[id] = true
 		}
 
 		next := make(map[string]struct{})
 		for _, e := range edges {
+			if !visible[e.FromQuestionID] || !visible[e.ToQuestionID] {
+				continue
+			}
 			key := string(e.EdgeType) + "|" + e.FromQuestionID + "|" + e.ToQuestionID
+			if _, exists := edgeSet[key]; !exists && len(edgeSet) >= maxGraphEdges {
+				truncated = true
+				continue
+			}
+			additional := 0
+			for _, id := range []string{e.FromQuestionID, e.ToQuestionID} {
+				if _, known := discovered[id]; !known {
+					if _, queued := next[id]; !queued {
+						additional++
+					}
+				}
+			}
+			if len(discovered)+len(next)+additional > maxGraphNodes {
+				truncated = true
+				continue
+			}
 			edgeSet[key] = e
 
 			if _, ok := discovered[e.FromQuestionID]; !ok {
@@ -157,7 +228,7 @@ func (s *LearningService) BuildQuestionGraph(questionPK int, depth int) (*Questi
 	questionIDs := mapKeys(discovered)
 	questions := make([]models.Question, 0, len(questionIDs))
 	if len(questionIDs) > 0 {
-		if err := s.db.Where("question_id IN ?", questionIDs).Find(&questions).Error; err != nil {
+		if err := s.uniqueVisibleQuestions().Where("question_id IN ?", questionIDs).Find(&questions).Error; err != nil {
 			return nil, err
 		}
 	}
@@ -200,6 +271,7 @@ func (s *LearningService) BuildQuestionGraph(questionPK int, depth int) (*Questi
 
 	tree := buildGraphTree(rootID, questionByID, edges)
 	return &QuestionGraphResult{
+		Truncated:      truncated,
 		RootQuestionID: root.QuestionId,
 		RootQuestionPK: root.Id,
 		Nodes:          nodes,
@@ -297,7 +369,7 @@ func (s *LearningService) RecommendNextQuestions(userUUID string, questionPK int
 	}
 
 	var question models.Question
-	if err := s.db.Where("id = ?", questionPK).First(&question).Error; err != nil {
+	if err := s.visibleQuestions().Where("id = ?", questionPK).First(&question).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrLearningQuestionNotFound
 		}
@@ -336,7 +408,10 @@ func (s *LearningService) RecommendNextQuestions(userUUID string, questionPK int
 		return nil, err
 	}
 
-	recommendations, exists := s.buildRecommendations(candidates, currentQuestionID, solvedQuestionIDs, limit)
+	recommendations, exists, err := s.buildRecommendations(candidates, currentQuestionID, solvedQuestionIDs, limit)
+	if err != nil {
+		return nil, err
+	}
 	if len(recommendations) < limit {
 		need := limit - len(recommendations)
 		fallback, err := s.buildTagFallbackRecommendations(question, solvedQuestionIDs, exists, need)
@@ -673,7 +748,7 @@ func (s *LearningService) collectSimilarCandidates(currentQuestionID string, lim
 	return out, nil
 }
 
-func (s *LearningService) buildRecommendations(candidates []recCandidate, currentQuestionID string, solved map[string]struct{}, limit int) ([]LearningRecommendation, map[string]struct{}) {
+func (s *LearningService) buildRecommendations(candidates []recCandidate, currentQuestionID string, solved map[string]struct{}, limit int) ([]LearningRecommendation, map[string]struct{}, error) {
 	ids := make([]string, 0, len(candidates))
 	for _, c := range candidates {
 		id := strings.TrimSpace(c.questionID)
@@ -685,7 +760,9 @@ func (s *LearningService) buildRecommendations(candidates []recCandidate, curren
 
 	questions := make([]models.Question, 0)
 	if len(ids) > 0 {
-		_ = s.db.Where("question_id IN ?", ids).Find(&questions).Error
+		if err := s.uniqueVisibleQuestions().Where("question_id IN ?", ids).Find(&questions).Error; err != nil {
+			return nil, nil, err
+		}
 	}
 	questionByID := make(map[string]models.Question, len(questions))
 	for _, q := range questions {
@@ -723,7 +800,7 @@ func (s *LearningService) buildRecommendations(candidates []recCandidate, curren
 			Reason:     c.reason,
 		})
 	}
-	return recs, exists
+	return recs, exists, nil
 }
 
 func (s *LearningService) buildTagFallbackRecommendations(current models.Question, solved map[string]struct{}, exists map[string]struct{}, limit int) ([]LearningRecommendation, error) {
@@ -736,7 +813,7 @@ func (s *LearningService) buildTagFallbackRecommendations(current models.Questio
 		return []LearningRecommendation{}, nil
 	}
 
-	query := s.db.Model(&models.Question{}).Where("id <> ?", current.Id)
+	query := s.uniqueVisibleQuestions().Where("id <> ?", current.Id)
 	conds := make([]string, 0, len(tokens))
 	args := make([]interface{}, 0, len(tokens))
 	for _, t := range tokens {

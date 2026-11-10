@@ -1,5 +1,7 @@
 # PatreonOJ
 
+部署、首次管理员授权、HTTPS/对象存储代理、备份与升级见 [部署指南](部署指南.md)。默认监听 `127.0.0.1:8080`，生产使用 Caddy 反代。
+
 基于 Go（Gin + GORM）的在线判题系统，当前以 MySQL/SQLite 为主存储，支持题目管理、提交评测、测试用例管理、OSS 文件管理，以及基于用户做题表现的学习推荐（研究报告第二部分的最小实现）。
 
 ## 当前能力
@@ -12,12 +14,12 @@
 - OSS：上传、预签名 URL、文件列表
 
 ## 关于图数据库（Neo4j）
-- 目前仅保留初始化流程（启动时可做 `InitGraph`）。
+- 默认关闭，通过 `graph_database.enabled: true` 开启初始化同步；当前网页关系图和学习推荐不依赖 Neo4j。
 - 面向前端展示和图查询的 `/graph/*` 路由已下线，待后续重新设计数据结构后再开放。
 
 ## 目录结构
 - `cmd/PatreonOJ`: 主程序入口
-- `internal/controllers`: HTTP 控制器层
+- `internal/Controllers`: HTTP 控制器层（目录大小写与 Git 一致）
 - `internal/services`: 业务逻辑层
 - `internal/models`: 数据模型
 - `internal/routers`: 路由注册
@@ -31,7 +33,7 @@ go mod tidy
 ```
 
 ### 2. 配置
-准备 `config.yaml`，至少配置：
+首次运行复制 `default_config.yaml` 为 `config.yaml`，填写真实对象存储凭据，至少配置：
 - `server`
 - `database`
 - `judge`
@@ -43,7 +45,7 @@ go mod tidy
 go run cmd/PatreonOJ/main.go
 ```
 
-默认地址：`http://localhost:8080`
+默认地址：`http://127.0.0.1:8080`；`GET /healthz` 验证 API 与数据库连接。
 
 ## 主要接口（按当前 router）
 
@@ -53,13 +55,14 @@ go run cmd/PatreonOJ/main.go
 - `POST /user/register`
 - `POST /user/logout`
 - `GET /user/solves/:uuid`
-- `GET /user/solve/?uuid=&question_number=`
-- `GET /user/:uuid`
-- `PUT /user/:uuid?operator_uuid=`
+- `GET /user/me`
+- `GET /user/:id`（数字 ID / UUID，仅本人和管理员）
+- `PUT /user/:id`（数字 ID / UUID，仅本人和管理员）
+- `PUT /user/update/:id`（旧路径兼容）
+- `GET /user/:id/public`（匿名公开昵称和头像，不返回邮箱）
 
 ### 提交查询 `/api`
-- `GET /api/problems/:question_number/submissions`
-- `GET /api/problems/id/:question_id/submissions`
+- `GET /api/problems/:id/submissions`（题目数据库主键）
 - `GET /api/users/:user_id/submissions`
 
 ### 学习推荐与反馈闭环 `/learning`
@@ -86,11 +89,9 @@ go run cmd/PatreonOJ/main.go
 ### 题目 `/question`
 - `GET /question/`
 - `GET /question/new`
-- `GET /question/id/:question_id`
-- `GET /question/:number`
+- `GET /question/:id`（题目数据库主键）
 - `POST /question/`
-- `POST /question/id/:question_id`
-- `POST /question/:number`（兼容）
+- `POST /question/:id`（更新）
 - `DELETE /question/delete`
 
 ### 提交 `/submission`

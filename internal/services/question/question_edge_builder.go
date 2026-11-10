@@ -1,15 +1,12 @@
 package question
 
 import (
-	"errors"
 	"log"
 	"strings"
-	"time"
 
 	"patreonoj/internal/models"
 
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 // QuestionEdgeBuilder builds question relation edges after question creation.
@@ -17,10 +14,10 @@ type QuestionEdgeBuilder interface {
 	Enqueue(questionNumber int)
 }
 
-// AsyncQuestionEdgeBuilder handles edge building asynchronously.
+// AsyncQuestionEdgeBuilder preserves the existing API. Rebuilding is synchronous
+// so accepted edits cannot leave volatile background work behind on shutdown.
 type AsyncQuestionEdgeBuilder struct {
-	db    *gorm.DB
-	queue chan int
+	db *gorm.DB
 }
 
 // NewAsyncQuestionEdgeBuilder creates a channel-based async edge builder.
@@ -28,62 +25,49 @@ func NewAsyncQuestionEdgeBuilder(db *gorm.DB, queueSize int) QuestionEdgeBuilder
 	if db == nil {
 		return nil
 	}
-	if queueSize <= 0 {
-		queueSize = 128
-	}
-
-	builder := &AsyncQuestionEdgeBuilder{
-		db:    db,
-		queue: make(chan int, queueSize),
-	}
-	go builder.run()
-	return builder
+	return &AsyncQuestionEdgeBuilder{db: db}
 }
 
 func (b *AsyncQuestionEdgeBuilder) Enqueue(questionNumber int) {
 	if questionNumber <= 0 {
 		return
 	}
-	select {
-	case b.queue <- questionNumber:
-	default:
-		go func() { b.queue <- questionNumber }()
-	}
-}
-
-func (b *AsyncQuestionEdgeBuilder) run() {
-	for questionNumber := range b.queue {
-		if err := b.buildForQuestion(questionNumber); err != nil {
-			log.Printf("question edge builder failed(question_number=%d): %v", questionNumber, err)
-		}
+	if err := b.buildForQuestion(questionNumber); err != nil {
+		log.Printf("question edge builder failed(question_number=%d): %v", questionNumber, err)
 	}
 }
 
 func (b *AsyncQuestionEdgeBuilder) buildForQuestion(questionNumber int) error {
+	return b.db.Transaction(func(tx *gorm.DB) error { return refreshQuestionEdges(tx, questionNumber) })
+}
+
+func refreshQuestionEdges(db *gorm.DB, questionNumber int) error {
 	var current models.Question
-	if err := b.db.Where("id = ?", questionNumber).First(&current).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil
-		}
+	if err := db.Where("id = ?", questionNumber).First(&current).Error; err != nil {
 		return err
 	}
-
-	if strings.TrimSpace(current.QuestionId) == "" {
+	var others []models.Question
+	if err := db.Find(&others).Error; err != nil {
+		return err
+	}
+	counts := map[string]int{}
+	for _, other := range others {
+		counts[other.QuestionId]++
+	}
+	if err := deleteQuestionEdges(db, current.QuestionId); err != nil {
+		return err
+	}
+	// Duplicate business identifiers remain valid question records, but cannot
+	// safely identify graph endpoints. Never guess which question they refer to.
+	if counts[current.QuestionId] != 1 || strings.TrimSpace(current.QuestionId) == "" {
 		return nil
 	}
-
 	currentTags := parseTagSet(current.Tags)
 	if len(currentTags) == 0 {
 		return nil
 	}
-
-	var others []models.Question
-	if err := b.db.Where("id <> ?", current.Id).Find(&others).Error; err != nil {
-		return err
-	}
-
 	for _, other := range others {
-		if strings.TrimSpace(other.QuestionId) == "" {
+		if other.Id == current.Id || counts[other.QuestionId] != 1 || strings.TrimSpace(other.QuestionId) == "" {
 			continue
 		}
 
@@ -94,49 +78,39 @@ func (b *AsyncQuestionEdgeBuilder) buildForQuestion(questionNumber int) error {
 
 		switch {
 		case isStrictSubset(otherTags, currentTags):
-			b.createProgressionEdges(other.QuestionId, current.QuestionId)
+			if err := createProgressionEdges(db, other.QuestionId, current.QuestionId); err != nil {
+				return err
+			}
 		case isStrictSubset(currentTags, otherTags):
-			b.createProgressionEdges(current.QuestionId, other.QuestionId)
+			if err := createProgressionEdges(db, current.QuestionId, other.QuestionId); err != nil {
+				return err
+			}
 		case hasIntersection(currentTags, otherTags):
-			b.createSimilarEdges(current.QuestionId, other.QuestionId)
+			if err := createSimilarEdges(db, current.QuestionId, other.QuestionId); err != nil {
+				return err
+			}
 		}
 	}
 
 	return nil
 }
 
-func (b *AsyncQuestionEdgeBuilder) createProgressionEdges(fromQuestionID, toQuestionID string) {
-	if err := b.upsertEdge(fromQuestionID, toQuestionID, models.QuestionRelationEdgeTypePrerequisite); err != nil {
-		log.Printf("create PREREQUISITE relation failed(%s->%s): %v", fromQuestionID, toQuestionID, err)
-	}
-	if err := b.upsertEdge(fromQuestionID, toQuestionID, models.QuestionRelationEdgeTypeNextLevel); err != nil {
-		log.Printf("create NEXT_LEVEL relation failed(%s->%s): %v", fromQuestionID, toQuestionID, err)
-	}
+func deleteQuestionEdges(db *gorm.DB, questionID string) error {
+	return db.Where("from_question_id = ? OR to_question_id = ?", questionID, questionID).Delete(&models.QuestionRelationEdge{}).Error
 }
 
-func (b *AsyncQuestionEdgeBuilder) createSimilarEdges(questionAID, questionBID string) {
-	if err := b.upsertEdge(questionAID, questionBID, models.QuestionRelationEdgeTypeSimilar); err != nil {
-		log.Printf("create SIMILAR relation failed(%s->%s): %v", questionAID, questionBID, err)
-	}
-	if err := b.upsertEdge(questionBID, questionAID, models.QuestionRelationEdgeTypeSimilar); err != nil {
-		log.Printf("create SIMILAR relation failed(%s->%s): %v", questionBID, questionAID, err)
-	}
+func createProgressionEdges(db *gorm.DB, fromID, toID string) error {
+	return db.Create(&[]models.QuestionRelationEdge{
+		{FromQuestionID: fromID, ToQuestionID: toID, EdgeType: models.QuestionRelationEdgeTypePrerequisite},
+		{FromQuestionID: fromID, ToQuestionID: toID, EdgeType: models.QuestionRelationEdgeTypeNextLevel},
+	}).Error
 }
 
-func (b *AsyncQuestionEdgeBuilder) upsertEdge(fromQuestionID, toQuestionID string, edgeType models.QuestionRelationEdgeType) error {
-	now := time.Now().UTC()
-	edge := models.QuestionRelationEdge{
-		FromQuestionID: fromQuestionID,
-		ToQuestionID:   toQuestionID,
-		EdgeType:       edgeType,
-	}
-
-	return b.db.Clauses(clause.OnConflict{
-		Columns: []clause.Column{{Name: "from_question_id"}, {Name: "to_question_id"}, {Name: "edge_type"}},
-		DoUpdates: clause.Assignments(map[string]interface{}{
-			"updated_at": now,
-		}),
-	}).Create(&edge).Error
+func createSimilarEdges(db *gorm.DB, firstID, secondID string) error {
+	return db.Create(&[]models.QuestionRelationEdge{
+		{FromQuestionID: firstID, ToQuestionID: secondID, EdgeType: models.QuestionRelationEdgeTypeSimilar},
+		{FromQuestionID: secondID, ToQuestionID: firstID, EdgeType: models.QuestionRelationEdgeTypeSimilar},
+	}).Error
 }
 
 func parseTagSet(tags string) map[string]struct{} {

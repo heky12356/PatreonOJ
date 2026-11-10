@@ -3,7 +3,8 @@ FROM golang:latest AS builder
 
 # 使用代理加速下载
 RUN go env -w GOPROXY=https://goproxy.cn,direct
-RUN go install github.com/criyle/go-judge/cmd/go-judge@latest
+ARG GO_JUDGE_VERSION=v1.14.0
+RUN go install github.com/criyle/go-judge/cmd/go-judge@${GO_JUDGE_VERSION}
 
 # Runtime Stage
 FROM ubuntu:22.04

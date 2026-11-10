@@ -1,0 +1,19 @@
+# Replace oj.example.com and the frontend root before use.
+oj.example.com {
+	encode zstd gzip
+	request_body {
+		max_size 34MB
+	}
+	handle_path /api/* {
+		reverse_proxy 127.0.0.1:8080
+	}
+	handle_path /oss/* {
+		# Keep the original Host header: S3 signatures include it.
+		reverse_proxy 127.0.0.1:9000
+	}
+	handle {
+		root * /var/www/patreonoj
+		try_files {path} /index.html
+		file_server
+	}
+}

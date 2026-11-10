@@ -2,8 +2,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"html/template"
 	"log"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"patreonoj/internal/config"
@@ -33,9 +38,12 @@ func main() {
 	}
 
 	// 自动迁移数据库表
-	// if err := models.AutoMigrate(); err != nil {
-	// 	log.Fatalf("数据库表迁移失败: %v", err)
-	// }
+	if err := models.AutoMigrate(); err != nil {
+		log.Fatalf("数据库表迁移失败: %v", err)
+	}
+	if sqlDB, err := models.DB.DB(); err == nil {
+		defer sqlDB.Close()
+	}
 
 	// 初始化OJ首页数据
 	if err := models.InitOjOverView(); err != nil {
@@ -54,7 +62,8 @@ func main() {
 	} else {
 		log.Printf("OSS初始化成功: %s", config.GlobalConfig.OSS.Address)
 		// 自动创建存储桶
-		ctx := context.Background()
+		ctx, cancelOSS := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancelOSS()
 		bucketName := config.GlobalConfig.OSS.BucketName
 		if bucketName == "" {
 			bucketName = "patreon-oj-cases" // 默认值
@@ -75,7 +84,7 @@ func main() {
 	}
 
 	var graphService *graph.QuestionGraphService
-	if config.GlobalConfig != nil {
+	if config.GlobalConfig.GraphDatabase.Enabled {
 		neo4jClient, err := graph.NewNeo4jClient(graph.Neo4jConfig{
 			URI:      config.GlobalConfig.GraphDatabase.Neo4j.URI,
 			Username: config.GlobalConfig.GraphDatabase.Neo4j.Username,
@@ -85,12 +94,15 @@ func main() {
 		if err != nil {
 			log.Printf("Warning: Failed to initialize Neo4j client: %v", err)
 		} else {
+			defer neo4jClient.Close()
 			graphService = graph.NewQuestionGraphService(neo4jClient)
 			log.Printf("图数据库服务初始化成功: %s", config.GlobalConfig.GraphDatabase.Neo4j.URI)
 		}
 	}
 	if graphService != nil {
-		if err := graphService.InitGraph(context.Background(), models.DB); err != nil {
+		ctx, cancelGraph := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancelGraph()
+		if err := graphService.InitGraph(ctx, models.DB); err != nil {
 			log.Printf("warning: failed to init graph: %v", err)
 		}
 	}
@@ -100,6 +112,9 @@ func main() {
 
 	// 创建路由引擎
 	r := gin.Default()
+	if err := r.SetTrustedProxies(config.GlobalConfig.Server.TrustedProxies); err != nil {
+		log.Fatal(err)
+	}
 
 	// 自定义模板函数 - 注意要放在加载模板前面
 	r.SetFuncMap(template.FuncMap{
@@ -107,12 +122,34 @@ func main() {
 	})
 
 	// 初始化路由
-	routers.RoutersInit(r, ossClient)
+	stopWorker := routers.RoutersInit(r, ossClient)
 
 	// 启动服务器
 	serverAddr := config.GlobalConfig.GetServerAddr()
 	log.Printf("服务器启动在端口: %s", serverAddr)
-	if err := r.Run(serverAddr); err != nil {
-		log.Fatalf("服务器启动失败: %v", err)
+	server := &http.Server{
+		Addr: serverAddr, Handler: r,
+		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second,
+		WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second,
+		MaxHeaderBytes: 1 << 20,
+	}
+	stopSignal, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	serverError := make(chan error, 1)
+	go func() { serverError <- server.ListenAndServe() }()
+	select {
+	case <-stopSignal.Done():
+	case err := <-serverError:
+		if !errors.Is(err, http.ErrServerClosed) {
+			log.Printf("服务器停止: %v", err)
+		}
+	}
+	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancelShutdown()
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		log.Printf("HTTP关闭失败: %v", err)
+	}
+	if err := stopWorker(shutdownCtx); err != nil {
+		log.Printf("评测任务停止失败: %v", err)
 	}
 }

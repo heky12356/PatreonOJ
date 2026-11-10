@@ -4,9 +4,9 @@ database:
   mysql:
     host: "localhost"
     port: 3306
-    username: "root"
-    password: "zzx123.1"
-    dbname: "ye"
+    username: "oj"
+    password: "CHANGE_ME_MYSQL_PASSWORD"
+    dbname: "patreonoj"
     charset: "utf8mb4"
     parseTime: true
     loc: "Local"
@@ -15,29 +15,33 @@ database:
 
 # OSS 配置
 oss:
-  address: "localhost:9090"
-  public_address: "localhost:9090"  # 公网地址，用于生成前端访问URL
+  address: "127.0.0.1:9000"
+  public_address: "http://localhost:9000"  # 生产改为 https://你的站点域名
   public_path_prefix: ""
   public_read_prefixes: ["avatars/"] # 公开读前缀，会自动添加 / 前缀
-  access_key: "heky"
-  secret_key: "heky00172"
+  access_key: "ojadmin"
+  secret_key: "CHANGE_ME_MINIO_PASSWORD"
   bucket_name: "patreon-oj-cases"
 
 # 服务器配置
 server:
+  host: "127.0.0.1"
   port: 8080
   mode: "debug"  # debug, release, test
+  secure_cookies: false # HTTPS 反代生产环境设 true，本地 HTTP 开发设 false
+  trusted_proxies: [] # 同机 Caddy 可设 ["127.0.0.1", "::1"]
+  auth_max_concurrent: 2 # Argon2 单次约 64 MiB，同时最多 2 次
+  auth_requests_per_minute: 20 # 每个客户端 IP，登录/注册共用
 
 # 评测服务配置
 judge:
   mode: "local"  # local: 本地评测, remote: 远程API评测
-  api_url: "http://your-judge-service-api"
   timeout: 15  # 超时时间（秒）
   queue_size: 100  # 队列大小
 
   # Go-Judge 配置 (远程高效沙箱)
   go_judge:
-    enabled: true
+    enabled: false
     api_url: "http://localhost:5050/run"
     token: "" 
   
@@ -45,11 +49,11 @@ judge:
   local:
     enabled: true
     executor: docker
-    sandbox_dir: ./sandbox
     max_memory: 256
     # ms为单位
     max_time: 5000
     max_output_size: 1024
+    max_work_size: 256 # MiB；/work 使用 tmpfs，不挂载宿主目录
     docker_image_go: golang:1.22-bookworm
     docker_image_cpp: gcc:13-bookworm
     docker_image_python: python:3.12-bookworm
@@ -57,6 +61,7 @@ judge:
 
 # 图数据库配置
 graph_database:
+  enabled: false # 题目推荐和关系图使用关系型数据库，不依赖 Neo4j
   neo4j:
     uri: "bolt://localhost:7687"
     username: "neo4j"

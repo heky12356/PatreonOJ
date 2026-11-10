@@ -6,8 +6,10 @@ import (
 	"strconv"
 	"strings"
 
-	"patreonoj/internal/controllers/shared"
+	"patreonoj/internal/Controllers/shared"
+	"patreonoj/internal/models"
 	learningsvc "patreonoj/internal/services/learning"
+	"patreonoj/internal/util"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -29,6 +31,10 @@ func (lc *LearningController) RecommendByQuestion(c *gin.Context) {
 		shared.APIError(c, http.StatusBadRequest, "missing user uuid")
 		return
 	}
+	admin, ok := authorizeLearningUser(c, userUUID)
+	if !ok {
+		return
+	}
 
 	questionID, err := strconv.Atoi(strings.TrimSpace(c.Param("id")))
 	if err != nil || questionID <= 0 {
@@ -45,7 +51,7 @@ func (lc *LearningController) RecommendByQuestion(c *gin.Context) {
 		limit = 20
 	}
 
-	result, err := lc.service.RecommendNextQuestions(userUUID, questionID, limit)
+	result, err := lc.service.WithDrafts(admin).RecommendNextQuestions(userUUID, questionID, limit)
 	if errors.Is(err, learningsvc.ErrLearningUserNotFound) {
 		shared.APIError(c, http.StatusNotFound, "user not found")
 		return
@@ -66,6 +72,9 @@ func (lc *LearningController) GetUserFeedback(c *gin.Context) {
 	userUUID := strings.TrimSpace(c.Param("uuid"))
 	if userUUID == "" {
 		shared.APIError(c, http.StatusBadRequest, "missing user uuid")
+		return
+	}
+	if _, ok := authorizeLearningUser(c, userUUID); !ok {
 		return
 	}
 
@@ -104,7 +113,17 @@ func (lc *LearningController) GetQuestionGraph(c *gin.Context) {
 		return
 	}
 
-	result, err := lc.service.BuildQuestionGraph(questionID, depth)
+	admin := false
+	if value, ok := c.Get("currentUser"); ok {
+		if user, valid := value.(models.User); valid {
+			admin = util.UserInstance.HasPermission(user, "admin")
+		}
+	}
+	result, err := lc.service.WithDrafts(admin).BuildQuestionGraph(questionID, depth)
+	if errors.Is(err, learningsvc.ErrLearningAmbiguousQuestion) {
+		shared.APIError(c, http.StatusBadRequest, err.Error())
+		return
+	}
 	if errors.Is(err, learningsvc.ErrLearningQuestionNotFound) {
 		shared.APIError(c, http.StatusNotFound, "question not found")
 		return
@@ -115,4 +134,19 @@ func (lc *LearningController) GetQuestionGraph(c *gin.Context) {
 	}
 
 	shared.APIOK(c, http.StatusOK, "ok", gin.H{"data": result})
+}
+
+func authorizeLearningUser(c *gin.Context, targetUUID string) (bool, bool) {
+	value, exists := c.Get("currentUser")
+	user, valid := value.(models.User)
+	if !exists || !valid {
+		shared.APIError(c, http.StatusUnauthorized, "unauthorized")
+		return false, false
+	}
+	admin := util.UserInstance.HasPermission(user, "admin")
+	if user.UUID != targetUUID && !admin {
+		shared.APIError(c, http.StatusForbidden, "permission denied")
+		return false, false
+	}
+	return admin, true
 }

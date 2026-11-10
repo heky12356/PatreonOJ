@@ -2,384 +2,262 @@ package judge
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io/ioutil"
+	"io"
+	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
 	"patreonoj/internal/models"
 )
 
-// GoJudgeClient 负责与 go-judge 服务通信
+const defaultJudgeEnv = "PATH=/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
 type GoJudgeClient struct {
 	APIURL     string
+	Token      string
 	HTTPClient *http.Client
 }
 
-// NewGoJudgeClient 创建新的 go-judge 客户端
 func NewGoJudgeClient(apiURL string, timeout int) *GoJudgeClient {
-	return &GoJudgeClient{
-		APIURL: apiURL,
-		HTTPClient: &http.Client{
-			Timeout: time.Duration(timeout) * time.Second,
-		},
+	if timeout <= 0 {
+		timeout = 15
 	}
+	return &GoJudgeClient{APIURL: apiURL, HTTPClient: &http.Client{Timeout: time.Duration(timeout) * time.Second}}
 }
 
-// CmdRequest go-judge 请求结构 (部分字段)
 type CmdRequest struct {
 	Args          []string           `json:"args"`
 	Env           []string           `json:"env,omitempty"`
 	Files         []*CmdFile         `json:"files,omitempty"`
-	CPULimit      uint64             `json:"cpuLimit,omitempty"`    // ns
-	ClockLimit    uint64             `json:"clockLimit,omitempty"`  // ns
-	MemoryLimit   uint64             `json:"memoryLimit,omitempty"` // byte
+	CPULimit      uint64             `json:"cpuLimit,omitempty"`
+	ClockLimit    uint64             `json:"clockLimit,omitempty"`
+	MemoryLimit   uint64             `json:"memoryLimit,omitempty"`
 	ProcLimit     uint64             `json:"procLimit,omitempty"`
-	StackLimit    uint64             `json:"stackLimit,omitempty"` // byte
+	StackLimit    uint64             `json:"stackLimit,omitempty"`
 	CopyIn        map[string]CmdFile `json:"copyIn,omitempty"`
 	CopyOut       []string           `json:"copyOut,omitempty"`
 	CopyOutCached []string           `json:"copyOutCached,omitempty"`
 	CopyOutDir    string             `json:"copyOutDir,omitempty"`
 }
 
-// CmdFile 文件定义
 type CmdFile struct {
 	Name    string  `json:"name,omitempty"`
 	Content *string `json:"content,omitempty"`
 	Src     *string `json:"src,omitempty"`
 	FileID  *string `json:"fileId,omitempty"`
-	Max     int64   `json:"max,omitempty"` // max size for output
+	Max     int64   `json:"max,omitempty"`
 }
 
-// CmdResponse go-judge 响应结构
 type CmdResponse struct {
 	Status     string            `json:"status"`
 	ExitStatus int               `json:"exitStatus"`
 	Error      string            `json:"error"`
-	Time       uint64            `json:"time"`   // ns
-	Memory     uint64            `json:"memory"` // byte
+	Time       uint64            `json:"time"`
+	Memory     uint64            `json:"memory"`
 	RunTime    uint64            `json:"runTime"`
 	Files      map[string]string `json:"files"`
 	FileIds    map[string]string `json:"fileIds"`
 }
 
-// Run 执行判定
-func (c *GoJudgeClient) Run(code string, language string, inputs []string, timeLimitMs int64, memoryLimitMB int64) ([]models.TestCaseResult, error) {
-	// 转换限制单位
-	cpuLimitNs := uint64(timeLimitMs) * 1_000_000
-	clockLimitNs := cpuLimitNs * 3 // 给多一点墙上时间，防止IO等导致超时
-	memoryLimitByte := uint64(memoryLimitMB) * 1024 * 1024
+// CompileError is a user-code failure, so it must not trigger a second compilation locally.
+type CompileError struct{ Message string }
 
-	// 针对不同语言的策略：
+func (e *CompileError) Error() string { return "Compile Error: " + e.Message }
+
+func (c *GoJudgeClient) Run(code, language string, inputs []string, timeLimitMs, memoryLimitMB int64) ([]models.TestCaseResult, error) {
+	return c.RunContext(context.Background(), code, language, inputs, timeLimitMs, memoryLimitMB)
+}
+
+func (c *GoJudgeClient) RunContext(ctx context.Context, code, language string, inputs []string, timeLimitMs, memoryLimitMB int64) ([]models.TestCaseResult, error) {
+	if len(inputs) == 0 {
+		return nil, errors.New("no test cases supplied")
+	}
+	if timeLimitMs <= 0 || memoryLimitMB <= 0 || timeLimitMs > 86_400_000 || memoryLimitMB > 1_048_576 {
+		return nil, errors.New("invalid judge resource limits")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	cpu, clock, memory := uint64(timeLimitMs)*1_000_000, uint64(timeLimitMs)*3_000_000, uint64(memoryLimitMB)*1024*1024
+	var artifact, artifactID string
 	switch language {
-	case "cpp", "go":
-		// 需要编译的语言
-		return c.runCompiledLanguage(code, language, inputs, cpuLimitNs, clockLimitNs, memoryLimitByte)
+	case "cpp", "go", "java":
+		var err error
+		artifact, artifactID, err = c.compile(ctx, code, language)
+		if err != nil {
+			return nil, err
+		}
+		defer c.deleteCachedFile(artifactID)
 	case "python":
-		// 解释型语言
-		return c.runInterpretedLanguage(code, language, inputs, cpuLimitNs, clockLimitNs, memoryLimitByte)
-	case "java":
-		return c.runJava(code, inputs, cpuLimitNs, clockLimitNs, memoryLimitByte)
 	default:
 		return nil, fmt.Errorf("unsupported language for go-judge: %s", language)
 	}
-}
-
-// runCompiledLanguage 处理编译型语言 (C++, Go)
-func (c *GoJudgeClient) runCompiledLanguage(code, language string, inputs []string, cpuLimit, clockLimit, memoryLimit uint64) ([]models.TestCaseResult, error) {
-	// 步骤 1: 编译
-	// 构造编译请求
-	var compileCmd CmdRequest
-	var srcName, exeName string
-	defaultEnv := "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-
-	if language == "cpp" {
-		srcName = "main.cpp"
-		exeName = "main"
-		compileCmd = CmdRequest{
-			Args: []string{"g++", srcName, "-o", exeName, "-O2", "-std=c++17"}, // 假设环境有 g++
-			Env:  []string{defaultEnv},
-			Files: []*CmdFile{
-				{Content: new(string)},
-				{Name: "stdout", Max: 10240},
-				{Name: "stderr", Max: 10240},
-			},
-			CopyIn: map[string]CmdFile{
-				srcName: {Content: &code},
-			},
-			CopyOut:     []string{exeName},       // 保留可执行文件供后续使用
-			CPULimit:    10 * 1000 * 1000 * 1000, // 10s 编译时间
-			ClockLimit:  10 * 1000 * 1000 * 1000,
-			MemoryLimit: 512 * 1024 * 1024,
-			ProcLimit:   50,
-		}
-	} else if language == "go" {
-		srcName = "main.go"
-		exeName = "main"
-		compileCmd = CmdRequest{
-			Args: []string{"go", "build", "-o", exeName, srcName},
-			Env:  []string{"GOCACHE=/tmp", "GOMODCACHE=/tmp", defaultEnv}, // Go build env
-			Files: []*CmdFile{
-				{Content: new(string)},
-				{Name: "stdout", Max: 10240},
-				{Name: "stderr", Max: 10240},
-			},
-			CopyIn: map[string]CmdFile{
-				srcName: {Content: &code},
-			},
-			CopyOut:     []string{exeName},
-			CPULimit:    10 * 1000 * 1000 * 1000,
-			ClockLimit:  10 * 1000 * 1000 * 1000,
-			MemoryLimit: 512 * 1024 * 1024,
-			ProcLimit:   50,
-		}
-	}
-
-	// 发送编译请求
-	compileReqBody := map[string]interface{}{
-		"cmd": []CmdRequest{compileCmd},
-	}
-	compileResps, err := c.doRequest(compileReqBody)
-	if err != nil {
-		return nil, fmt.Errorf("compile request failed: %w", err)
-	}
-
-	compileResult := compileResps[0]
-	if compileResult.Status != "Accepted" {
-		return nil, fmt.Errorf("Compile Error: %s %s", compileResult.Status, compileResult.Error)
-	}
-
-	// 修正编译请求，使用 copyOutCached
-	compileCmd.CopyOut = nil
-	compileCmd.CopyOutCached = []string{exeName}
-
-	// 重新构造请求体
-	compileReqBody = map[string]interface{}{
-		"cmd": []CmdRequest{compileCmd},
-	}
-	compileResps, err = c.doRequest(compileReqBody)
-	if err != nil {
-		return nil, err
-	}
-
-	if compileResps[0].Status != "Accepted" {
-		// 错误处理... 简化
-		return getAllErrorResult(inputs, "Compile Error"), nil
-	}
-
-	exeFileId := compileResps[0].FileIds[exeName]
-	if exeFileId == "" {
-		return nil, fmt.Errorf("compile success but no executable fileId returned")
-	}
-
-	// 步骤 2: 运行
-	// 构造批量运行请求
-	var runCmds []CmdRequest
+	cmds := make([]CmdRequest, 0, len(inputs))
 	for _, input := range inputs {
-		inputContent := input
-		runCmd := CmdRequest{
-			Args: []string{"./" + exeName},
-			Env:  []string{defaultEnv},
-			Files: []*CmdFile{
-				{Content: &inputContent},     // stdin
-				{Name: "stdout", Max: 10240}, // stdout (limit 10KB)
-				{Name: "stderr", Max: 10240}, // stderr
-			},
-			CopyIn: map[string]CmdFile{
-				exeName: {FileID: &exeFileId}, // 使用之前的 fileId
-			},
-			CPULimit:    cpuLimit,
-			ClockLimit:  clockLimit,
-			MemoryLimit: memoryLimit,
-			ProcLimit:   50,
+		in := input
+		cmd := CmdRequest{Env: []string{defaultJudgeEnv, "PYTHONIOENCODING=utf-8"}, Files: judgeFiles(&in), CPULimit: cpu, ClockLimit: clock, MemoryLimit: memory, ProcLimit: 64}
+		switch language {
+		case "python":
+			cmd.Args = []string{"python3", "main.py"}
+			cmd.CopyIn = map[string]CmdFile{"main.py": {Content: &code}}
+		case "java":
+			cmd.Args = []string{"java", "-XX:+UseSerialGC", fmt.Sprintf("-Xmx%dm", max(int64(16), memoryLimitMB/2)), "-cp", "main.jar", "Main"}
+			cmd.CopyIn = map[string]CmdFile{artifact: {FileID: &artifactID}}
+		default:
+			cmd.Args = []string{"./" + artifact}
+			cmd.CopyIn = map[string]CmdFile{artifact: {FileID: &artifactID}}
 		}
-		runCmds = append(runCmds, runCmd)
+		cmds = append(cmds, cmd)
 	}
-
-	runReqBody := map[string]interface{}{
-		"cmd": runCmds,
-	}
-	runResps, err := c.doRequest(runReqBody)
+	responses, err := c.request(ctx, cmds)
 	if err != nil {
 		return nil, err
 	}
-
-	// 转换结果
 	results := make([]models.TestCaseResult, len(inputs))
-	for i, resp := range runResps {
-		results[i] = parseResult(resp, inputs[i])
-	}
-
-	return results, nil
-}
-
-// runInterpretedLanguage 处理解释型语言 (Python)
-func (c *GoJudgeClient) runInterpretedLanguage(code, language string, inputs []string, cpuLimit, clockLimit, memoryLimit uint64) ([]models.TestCaseResult, error) {
-	defaultEnv := "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-
-	var runCmds []CmdRequest
-	for _, input := range inputs {
-		inputContent := input
-		codeRef := code // copy locally
-		runCmd := CmdRequest{
-			Args: []string{"python3", "main.py"},
-			Env:  []string{defaultEnv, "PYTHONIOENCODING=utf-8"}, // Add encoding for safety
-			Files: []*CmdFile{
-				{Content: &inputContent},
-				{Name: "stdout", Max: 10240},
-				{Name: "stderr", Max: 10240},
-			},
-			CopyIn: map[string]CmdFile{
-				"main.py": {Content: &codeRef},
-			},
-			CPULimit:    cpuLimit,
-			ClockLimit:  clockLimit,
-			MemoryLimit: memoryLimit,
-			ProcLimit:   50,
+	for i, response := range responses {
+		if response.Status == "Internal Error" || response.Status == "File Error" {
+			return nil, fmt.Errorf("go-judge service error: %s %s", response.Status, response.Error)
 		}
-		runCmds = append(runCmds, runCmd)
-	}
-
-	runReqBody := map[string]interface{}{
-		"cmd": runCmds,
-	}
-	runResps, err := c.doRequest(runReqBody)
-	if err != nil {
-		return nil, err
-	}
-
-	results := make([]models.TestCaseResult, len(inputs))
-	for i, resp := range runResps {
-		results[i] = parseResult(resp, inputs[i])
+		results[i] = parseResult(response, inputs[i])
 	}
 	return results, nil
 }
 
-// runJava 处理 Java (需要编译)
-func (c *GoJudgeClient) runJava(code string, inputs []string, cpuLimit, clockLimit, memoryLimit uint64) ([]models.TestCaseResult, error) {
-	// 1. Compile Main.java -> Main.class
-	defaultEnv := "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-	compileCmd := CmdRequest{
-		Args: []string{"javac", "Main.java"},
-		Env:  []string{defaultEnv},
-		Files: []*CmdFile{
-			{Content: new(string)},
-			{Name: "stdout", Max: 10240},
-			{Name: "stderr", Max: 10240},
-		},
-		CopyIn: map[string]CmdFile{
-			"Main.java": {Content: &code},
-		},
-		CopyOutCached: []string{"Main.class"},
-		CPULimit:      10 * 1000 * 1000 * 1000,
-		ClockLimit:    10 * 1000 * 1000 * 1000,
-		MemoryLimit:   512 * 1024 * 1024,
-		ProcLimit:     50,
-	}
+func judgeFiles(input *string) []*CmdFile {
+	return []*CmdFile{{Content: input}, {Name: "stdout", Max: 1024 * 1024}, {Name: "stderr", Max: 64 * 1024}}
+}
 
-	compileReqBody := map[string]interface{}{"cmd": []CmdRequest{compileCmd}}
-	compileResps, err := c.doRequest(compileReqBody)
+func (c *GoJudgeClient) compile(ctx context.Context, code, language string) (string, string, error) {
+	artifact := "main"
+	cmd := CmdRequest{Env: []string{defaultJudgeEnv}, Files: judgeFiles(new(string)), CPULimit: 10_000_000_000, ClockLimit: 15_000_000_000, MemoryLimit: 512 * 1024 * 1024, ProcLimit: 64}
+	switch language {
+	case "cpp":
+		cmd.Args = []string{"g++", "main.cpp", "-o", artifact, "-O2", "-std=c++17"}
+		cmd.CopyIn = map[string]CmdFile{"main.cpp": {Content: &code}}
+	case "go":
+		cmd.Args = []string{"go", "build", "-o", artifact, "main.go"}
+		cmd.Env = append(cmd.Env, "GOCACHE=/tmp/go-cache", "GOMODCACHE=/tmp/go-mod", "GO111MODULE=off", "GOTOOLCHAIN=local")
+		cmd.CopyIn = map[string]CmdFile{"main.go": {Content: &code}}
+	case "java":
+		artifact = "main.jar"
+		cmd.Args = []string{"sh", "-c", "mkdir -p classes && javac -d classes Main.java && jar cf main.jar -C classes ."}
+		cmd.CopyIn = map[string]CmdFile{"Main.java": {Content: &code}}
+	}
+	cmd.CopyOutCached = []string{artifact + "?"}
+	responses, err := c.request(ctx, []CmdRequest{cmd})
 	if err != nil {
-		return nil, err
+		return "", "", fmt.Errorf("go-judge execution request failed: %w", err)
 	}
-
-	if compileResps[0].Status != "Accepted" {
-		return getAllErrorResult(inputs, "Compile Error"), nil
+	response := responses[0]
+	if response.Status == "Internal Error" || response.Status == "File Error" {
+		return "", "", fmt.Errorf("go-judge service error: %s %s", response.Status, response.Error)
 	}
-
-	classFileId := compileResps[0].FileIds["Main.class"]
-	if classFileId == "" {
-		return nil, fmt.Errorf("java compile success but no class fileId")
-	}
-
-	// 2. Run java
-	var runCmds []CmdRequest
-	for _, input := range inputs {
-		inputContent := input
-		runCmd := CmdRequest{
-			Args: []string{"java", "Main"}, // 假设 CLASSPATH 默认包含 .
-			Env:  []string{defaultEnv},
-			Files: []*CmdFile{
-				{Content: &inputContent},
-				{Name: "stdout", Max: 10240},
-				{Name: "stderr", Max: 10240},
-			},
-			CopyIn: map[string]CmdFile{
-				"Main.class": {FileID: &classFileId},
-			},
-			CPULimit:    cpuLimit,
-			ClockLimit:  clockLimit,
-			MemoryLimit: memoryLimit,
-			ProcLimit:   50,
+	if response.Status != "Accepted" || response.ExitStatus != 0 {
+		for _, id := range response.FileIds {
+			c.deleteCachedFile(id)
 		}
-		runCmds = append(runCmds, runCmd)
+		return "", "", &CompileError{Message: strings.TrimSpace(response.Status + " " + response.Error + " " + response.Files["stderr"])}
 	}
+	id := response.FileIds[artifact]
+	if id == "" {
+		id = response.FileIds[artifact+"?"]
+	}
+	if id == "" {
+		return "", "", errors.New("go-judge invalid response: no executable fileId returned")
+	}
+	return artifact, id, nil
+}
 
-	runReqBody := map[string]interface{}{"cmd": runCmds}
-	runResps, err := c.doRequest(runReqBody)
+func (c *GoJudgeClient) request(ctx context.Context, cmds []CmdRequest) ([]CmdResponse, error) {
+	body, err := json.Marshal(map[string]interface{}{"cmd": cmds})
 	if err != nil {
 		return nil, err
 	}
-
-	results := make([]models.TestCaseResult, len(inputs))
-	for i, resp := range runResps {
-		results[i] = parseResult(resp, inputs[i])
+	results, status, err := c.post(ctx, c.APIURL, body)
+	if err == nil && status == http.StatusNotFound {
+		if fallback, ok := fallbackGoJudgeURL(c.APIURL, status); ok {
+			results, status, err = c.post(ctx, fallback, body)
+		}
+	}
+	if err != nil {
+		return nil, err
+	}
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("go-judge api error: %d", status)
+	}
+	if len(results) != len(cmds) {
+		return nil, fmt.Errorf("go-judge response count mismatch: got=%d want=%d", len(results), len(cmds))
 	}
 	return results, nil
 }
 
-func (c *GoJudgeClient) doRequest(body interface{}) ([]CmdResponse, error) {
-	jsonBody, err := json.Marshal(body)
+func (c *GoJudgeClient) post(ctx context.Context, address string, body []byte) ([]CmdResponse, int, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, address, bytes.NewReader(body))
 	if err != nil {
-		return nil, err
-	}
-
-	req, err := http.NewRequest("POST", c.APIURL, bytes.NewBuffer(jsonBody))
-	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.HTTPClient.Do(req)
+	if c.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.Token)
+	}
+	response, err := c.HTTPClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := ioutil.ReadAll(resp.Body)
-		if fallbackURL, ok := fallbackGoJudgeURL(c.APIURL, resp.StatusCode); ok {
-			retryReq, err := http.NewRequest("POST", fallbackURL, bytes.NewBuffer(jsonBody))
-			if err == nil {
-				retryReq.Header.Set("Content-Type", "application/json")
-				retryResp, retryErr := c.HTTPClient.Do(retryReq)
-				if retryErr == nil {
-					defer retryResp.Body.Close()
-					if retryResp.StatusCode == http.StatusOK {
-						var retryResults []CmdResponse
-						if err := json.NewDecoder(retryResp.Body).Decode(&retryResults); err != nil {
-							return nil, err
-						}
-						return retryResults, nil
-					}
-					retryBody, _ := ioutil.ReadAll(retryResp.Body)
-					return nil, fmt.Errorf("go-judge api error: %d - %s (retry %s => %d - %s)", resp.StatusCode, string(bodyBytes), fallbackURL, retryResp.StatusCode, string(retryBody))
-				}
-				return nil, fmt.Errorf("go-judge api error: %d - %s (retry %s failed: %v)", resp.StatusCode, string(bodyBytes), fallbackURL, retryErr)
-			}
-		}
-		return nil, fmt.Errorf("go-judge api error: %d - %s", resp.StatusCode, string(bodyBytes))
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		io.Copy(io.Discard, io.LimitReader(response.Body, 64*1024))
+		return nil, response.StatusCode, nil
 	}
-
-	// go-judge 返回的是 Response 数组
+	// Bound malformed upstream responses without buffering arbitrary amounts of data.
+	data, err := io.ReadAll(io.LimitReader(response.Body, 64*1024*1024+1))
+	if err != nil {
+		return nil, response.StatusCode, err
+	}
+	if len(data) > 64*1024*1024 {
+		return nil, response.StatusCode, errors.New("go-judge response exceeds size limit")
+	}
 	var results []CmdResponse
-	if err := json.NewDecoder(resp.Body).Decode(&results); err != nil {
-		return nil, err
+	if err := json.Unmarshal(data, &results); err != nil {
+		return nil, response.StatusCode, fmt.Errorf("invalid go-judge response: %w", err)
 	}
+	return results, response.StatusCode, nil
+}
 
-	return results, nil
+func (c *GoJudgeClient) deleteCachedFile(id string) {
+	if id == "" {
+		return
+	}
+	address, err := url.Parse(strings.TrimRight(c.APIURL, "/"))
+	if err != nil {
+		return
+	}
+	address.Path = strings.TrimSuffix(address.Path, "/run") + "/file/" + url.PathEscape(id)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, address.String(), nil)
+	if err != nil {
+		return
+	}
+	if c.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.Token)
+	}
+	response, err := c.HTTPClient.Do(req)
+	if err != nil {
+		log.Printf("go-judge cached file cleanup failed: %v", err)
+		return
+	}
+	defer response.Body.Close()
+	io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
+	if response.StatusCode >= 300 && response.StatusCode != 404 {
+		log.Printf("go-judge cached file cleanup status: %d", response.StatusCode)
+	}
 }
 
 func fallbackGoJudgeURL(apiURL string, statusCode int) (string, bool) {
@@ -387,9 +265,6 @@ func fallbackGoJudgeURL(apiURL string, statusCode int) (string, bool) {
 		return "", false
 	}
 	trimmed := strings.TrimSpace(apiURL)
-	if trimmed == "" {
-		return "", false
-	}
 	if strings.HasSuffix(trimmed, "/run") {
 		return strings.TrimSuffix(trimmed, "/run"), true
 	}
@@ -397,43 +272,19 @@ func fallbackGoJudgeURL(apiURL string, statusCode int) (string, bool) {
 }
 
 func parseResult(resp CmdResponse, input string) models.TestCaseResult {
-	r := models.TestCaseResult{
-		Input:       input,
-		Runtime:     int64(resp.Time / 1_000_000), // ns -> ms
-		MemoryUsage: int64(resp.Memory / 1024),    // byte -> KB
-	}
-
-	// 获取 stdout
-	if resp.Files != nil {
-		r.ActualOutput = resp.Files["stdout"]
-	}
-
-	// Status Mappings
+	r := models.TestCaseResult{Input: input, Runtime: int64(resp.Time / 1_000_000), MemoryUsage: int64(resp.Memory / 1024), ActualOutput: resp.Files["stdout"]}
 	switch resp.Status {
 	case "Accepted":
-	case "Time Limit Exceeded":
-		r.ActualOutput = "Time Limit Exceeded"
-	case "Memory Limit Exceeded":
-		r.ActualOutput = "Memory Limit Exceeded"
-	case "Signalled":
-		r.ActualOutput = fmt.Sprintf("Runtime Error (Signal %s)", resp.Error)
-	case "Non Zero Exit Status":
-		r.ActualOutput = "Runtime Error (Non Zero Exit)"
-	default:
-		r.ActualOutput = fmt.Sprintf("Error: %s", resp.Status)
-	}
-
-	return r
-}
-
-func getAllErrorResult(inputs []string, msg string) []models.TestCaseResult {
-	res := make([]models.TestCaseResult, len(inputs))
-	for i := range inputs {
-		res[i] = models.TestCaseResult{
-			Input:        inputs[i],
-			ActualOutput: msg,
-			IsCorrect:    false,
+		r.IsCorrect = resp.ExitStatus == 0
+		if !r.IsCorrect {
+			r.ActualOutput = "Runtime Error (Non Zero Exit)"
 		}
+	case "Time Limit Exceeded", "Memory Limit Exceeded", "Output Limit Exceeded":
+		r.ActualOutput = resp.Status
+	case "Signalled", "Nonzero Exit Status", "Non Zero Exit Status", "Dangerous Syscall":
+		r.ActualOutput = "Runtime Error: " + resp.Status
+	default:
+		r.ActualOutput = "Error: " + resp.Status
 	}
-	return res
+	return r
 }

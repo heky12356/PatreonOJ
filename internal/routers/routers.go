@@ -1,23 +1,27 @@
 package routers
 
 import (
-	controllers "patreonoj/internal/controllers"
-	adminauth "patreonoj/internal/controllers/auth"
-	adminlearning "patreonoj/internal/controllers/learning"
-	adminquestion "patreonoj/internal/controllers/question"
-	adminstorage "patreonoj/internal/controllers/storage"
-	adminsubmission "patreonoj/internal/controllers/submission"
-	admintestcase "patreonoj/internal/controllers/testcase"
-	adminuser "patreonoj/internal/controllers/user"
+	"context"
+	"net/http"
+	controllers "patreonoj/internal/Controllers"
+	adminauth "patreonoj/internal/Controllers/auth"
+	adminlearning "patreonoj/internal/Controllers/learning"
+	adminquestion "patreonoj/internal/Controllers/question"
+	adminstorage "patreonoj/internal/Controllers/storage"
+	adminsubmission "patreonoj/internal/Controllers/submission"
+	admintestcase "patreonoj/internal/Controllers/testcase"
+	adminuser "patreonoj/internal/Controllers/user"
+	"patreonoj/internal/config"
 	"patreonoj/internal/middleware"
 	"patreonoj/internal/models"
 	"patreonoj/internal/oss"
 	questionsvc "patreonoj/internal/services/question"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
 
-func RoutersInit(r *gin.Engine, ossClient *oss.OSS) {
+func RoutersInit(r *gin.Engine, ossClient *oss.OSS) func(context.Context) error {
 	userCtrl := adminuser.NewUserController(models.DB)
 	authCtrl := adminauth.NewAuthController(models.DB)
 	submissionCtrl := adminsubmission.NewSubmissionController(models.DB, ossClient)
@@ -29,6 +33,16 @@ func RoutersInit(r *gin.Engine, ossClient *oss.OSS) {
 	testCaseCtrl := admintestcase.NewTestCaseController(models.DB, ossClient)
 
 	r.Use(middleware.LoadCurrentUser(models.DB))
+	r.GET("/healthz", func(c *gin.Context) {
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Second)
+		defer cancel()
+		db, err := models.DB.DB()
+		if err != nil || db.PingContext(ctx) != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"status": "unavailable"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	})
 
 	authUserRouter := r.Group("/user").Use(middleware.RequireAuth())
 	{
@@ -37,13 +51,15 @@ func RoutersInit(r *gin.Engine, ossClient *oss.OSS) {
 		authUserRouter.POST("/logout", authCtrl.Logout)
 		authUserRouter.GET("/solves/:uuid", userSolveCtrl.Index)
 		authUserRouter.GET("/:id", userCtrl.Show)
+		authUserRouter.PUT("/:id", userCtrl.Update)
 		authUserRouter.PUT("/update/:id", userCtrl.Update)
 	}
 
 	userRouter := r.Group("/user")
 	{
-		userRouter.POST("/login", authCtrl.Login)
-		userRouter.POST("/register", authCtrl.Register)
+		throttle := middleware.AuthThrottle(config.GlobalConfig.Server.AuthMaxConcurrent, config.GlobalConfig.Server.AuthRequestsPerMinute)
+		userRouter.POST("/login", throttle, authCtrl.Login)
+		userRouter.POST("/register", throttle, authCtrl.Register)
 		// 获取用户详细
 		userRouter.GET("/:id/public", userCtrl.GetProfilePublic)
 	}
@@ -113,4 +129,5 @@ func RoutersInit(r *gin.Engine, ossClient *oss.OSS) {
 			ossRouter.GET("/files", ossCtrl.ListFiles)
 		}
 	}
+	return submissionCtrl.Shutdown
 }

@@ -4,8 +4,9 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 
-	"patreonoj/internal/controllers/shared"
+	"patreonoj/internal/Controllers/shared"
 	"patreonoj/internal/models"
 	usersvc "patreonoj/internal/services/user"
 	"patreonoj/internal/util"
@@ -72,12 +73,7 @@ func (uc *UserController) Show(c *gin.Context) {
 		shared.APIError(c, http.StatusForbidden, "未登录")
 		return
 	}
-	if !util.UserInstance.HasPermission(user.(models.User), "admin") {
-		shared.APIError(c, http.StatusForbidden, "permission denied")
-		return
-	}
-
-	user, err := uc.service.GetProfileById(id)
+	target, err := uc.service.GetByIdentifier(id)
 	if errors.Is(err, usersvc.ErrUserNotFound) {
 		shared.APIError(c, http.StatusNotFound, "user not found")
 		return
@@ -86,7 +82,11 @@ func (uc *UserController) Show(c *gin.Context) {
 		shared.APIError(c, http.StatusInternalServerError, "query user failed")
 		return
 	}
-	shared.APIOK(c, http.StatusOK, "ok", gin.H{"result": user})
+	if !shared.CanAccessUserState(user.(models.User), strconv.Itoa(target.Id)) {
+		shared.APIError(c, http.StatusForbidden, "permission denied")
+		return
+	}
+	shared.APIOK(c, http.StatusOK, "ok", gin.H{"result": target})
 }
 
 func (uc *UserController) GetProfilePublic(c *gin.Context) {
@@ -130,13 +130,31 @@ func (uc *UserController) Update(c *gin.Context) {
 		return
 	}
 
-	targetID := req.Id
+	target, err := uc.service.GetByIdentifier(strings.TrimSpace(c.Param("id")))
+	if errors.Is(err, usersvc.ErrUserNotFound) {
+		shared.APIError(c, http.StatusNotFound, "user not found")
+		return
+	}
+	if err != nil {
+		shared.APIError(c, http.StatusInternalServerError, "query user failed")
+		return
+	}
+	targetNumber := target.Id
+	targetID := strconv.Itoa(targetNumber)
+	if req.Id != nil {
+		bodyID, err := strconv.Atoi(strings.TrimSpace(*req.Id))
+		if err != nil || bodyID != targetNumber {
+			shared.APIError(c, http.StatusBadRequest, "body id must match the user id in the URL")
+			return
+		}
+	}
 
 	user, ok := c.Get("currentUser")
 	if !ok {
+		shared.APIError(c, http.StatusUnauthorized, "unauthorized")
 		return
 	}
-	if !shared.CanAccessUserState(user.(models.User), *targetID) {
+	if !shared.CanAccessUserState(user.(models.User), targetID) {
 		shared.APIError(c, http.StatusForbidden, "permission denied")
 		return
 	}
@@ -147,7 +165,7 @@ func (uc *UserController) Update(c *gin.Context) {
 		return
 	}
 
-	user, err := uc.service.UpdateByID(*targetID, usersvc.UserUpdateInput{
+	user, err = uc.service.UpdateByID(targetID, usersvc.UserUpdateInput{
 		Nickname:    req.Nickname,
 		Email:       req.Email,
 		AvatarURL:   req.AvatarURL,

@@ -21,10 +21,50 @@ func newSubmissionCommandTestDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("open test db failed: %v", err)
 	}
-	if err := db.AutoMigrate(&models.User{}, &models.Question{}, &models.Submission{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.Question{}, &models.TestCase{}, &models.Submission{}); err != nil {
 		t.Fatalf("migrate test db failed: %v", err)
 	}
 	return db
+}
+
+func TestHistoricalResultsFollowCurrentTestcaseVisibility(t *testing.T) {
+	db := newSubmissionCommandTestDB(t)
+	user := seedSubmissionCommandUser(t, db, "visibility-user", "active")
+	question := seedSubmissionCommandQuestion(t, db, 1)
+	testcase := models.TestCase{QuestionID: question.Id}
+	if err := db.Create(&testcase).Error; err != nil {
+		t.Fatal(err)
+	}
+	data, _ := json.Marshal([]models.TestCaseResult{{TestCaseID: testcase.ID, Input: "secret input", ExpectedOutput: "secret answer", ActualOutput: "wrong"}})
+	submission := models.NewSubmission(user.UUID, question.Id, "print(0)", "python")
+	submission.Status, submission.Results = "completed", string(data)
+	if err := db.Create(submission).Error; err != nil {
+		t.Fatal(err)
+	}
+	service := NewSubmissionCommandService(db, nil)
+	for _, stage := range []string{"public", "hidden", "deleted"} {
+		if stage == "hidden" {
+			if err := db.Model(&testcase).Update("is_hidden", true).Error; err != nil {
+				t.Fatal(err)
+			}
+		}
+		if stage == "deleted" {
+			if err := db.Delete(&testcase).Error; err != nil {
+				t.Fatal(err)
+			}
+		}
+		result, err := service.BuildSubmissionResultForViewer(submission.ID, user)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cases := result["results"].([]models.TestCaseResult)
+		if stage == "public" && cases[0].ExpectedOutput != "secret answer" {
+			t.Fatal("public case was redacted")
+		}
+		if stage != "public" && (cases[0].Input != "" || cases[0].ExpectedOutput != "" || cases[0].ActualOutput != "") {
+			t.Fatalf("%s case leaked: %+v", stage, cases)
+		}
+	}
 }
 
 func seedSubmissionCommandUser(t *testing.T, db *gorm.DB, uuid, status string) models.User {

@@ -6,10 +6,12 @@ import (
 	"sort"
 	"strings"
 	"unicode"
+	"time"
 
 	"patreonoj/internal/models"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const masteryLearningRate = 0.2
@@ -55,28 +57,15 @@ func (s *AssessmentService) UpdateUserMasteryBasedOnResult(userID string, questi
 }
 
 func updateSkillMastery(tx *gorm.DB, userID string, skillKey string, difficultyFactor float64) error {
-	var mastery models.UserSkillMastery
-	err := tx.Where("user_id = ? AND skill_key = ?", userID, skillKey).First(&mastery).Error
-	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-		return err
-	}
-
-	current := 0.0
-	if err == nil {
-		current = mastery.Mastery
-	}
-	next := nextMastery(current, difficultyFactor)
-
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		mastery = models.UserSkillMastery{
-			UserID:   userID,
-			SkillKey: skillKey,
-			Mastery:  next,
-		}
-		return tx.Create(&mastery).Error
-	}
-
-	return tx.Model(&mastery).Update("mastery", next).Error
+	factor := clamp01(masteryLearningRate * maxFloat(difficultyFactor, 0))
+	mastery := models.UserSkillMastery{UserID: userID, SkillKey: skillKey, Mastery: factor}
+	return tx.Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "user_id"}, {Name: "skill_key"}},
+		DoUpdates: clause.Assignments(map[string]interface{}{
+			"mastery": gorm.Expr("CASE WHEN mastery < 0 THEN ? WHEN mastery > 1 THEN 1 ELSE mastery + ? * (1 - mastery) END", factor, factor),
+			"updated_at": time.Now(),
+		}),
+	}).Create(&mastery).Error
 }
 
 func nextMastery(current float64, difficultyFactor float64) float64 {

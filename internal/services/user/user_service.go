@@ -2,7 +2,9 @@ package user
 
 import (
 	"errors"
+	"strconv"
 	"strings"
+	"time"
 
 	"patreonoj/internal/models"
 
@@ -40,7 +42,7 @@ func NewUserService(db *gorm.DB) *UserService {
 
 func (s *UserService) List(filter UserListFilter) ([]models.User, error) {
 	userList := make([]models.User, 0)
-	query := s.db.Model(&models.User{}).Preload("Roles")
+	query := s.db.Model(&models.User{}).Preload("Roles.Permissions")
 
 	if keyword := strings.TrimSpace(filter.Keyword); keyword != "" {
 		like := "%" + keyword + "%"
@@ -70,7 +72,6 @@ func (s *UserService) List(filter UserListFilter) ([]models.User, error) {
 	return userList, nil
 }
 
-// 废弃了
 func (s *UserService) GetByUUID(uuid string) (*models.User, error) {
 	var user models.User
 	if err := s.db.Preload("Roles.Permissions").Where("uuid = ?", uuid).First(&user).Error; err != nil {
@@ -85,12 +86,14 @@ func (s *UserService) GetByUUID(uuid string) (*models.User, error) {
 func (s *UserService) GetProfilePublic(id string) (map[string]string, error) {
 	var user models.User
 	if err := s.db.Where("id = ?", id).First(&user).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrUserNotFound
+		}
 		return nil, err
 	}
 
 	req := make(map[string]string)
 	req["nickname"] = user.Nickname
-	req["email"] = user.Email
 	req["avatar_url"] = user.AvatarURL
 
 	return req, nil
@@ -98,130 +101,100 @@ func (s *UserService) GetProfilePublic(id string) (map[string]string, error) {
 
 func (s *UserService) GetProfileById(id string) (*models.User, error) {
 	var user models.User
-	if err := s.db.Where("id = ?", id).First(&user).Error; err != nil {
-		return nil, err
-	}
-
-	return &user, nil
-}
-
-// 想要废弃，后面通过id来修改
-func (s *UserService) UpdateByUUID(uuid string, input UserUpdateInput) (*models.User, error) {
-	var user models.User
-	if err := s.db.Preload("Roles").Where("uuid = ?", uuid).First(&user).Error; err != nil {
+	if err := s.db.Preload("Roles.Permissions").Where("id = ?", id).First(&user).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrUserNotFound
 		}
 		return nil, err
 	}
 
-	updates := map[string]any{}
-	if input.Nickname != nil {
-		updates["nickname"] = strings.TrimSpace(*input.Nickname)
-	}
-	if input.Email != nil {
-		updates["email"] = strings.TrimSpace(*input.Email)
-	}
-	if input.AvatarURL != nil {
-		updates["avatar_url"] = strings.TrimSpace(*input.AvatarURL)
-	}
-	if input.Status != nil {
-		status := strings.TrimSpace(*input.Status)
-		if status != "active" && status != "disabled" {
-			return nil, ErrUserStatusInvalid
-		}
-		updates["status"] = status
-	}
-	if input.Permissions != nil {
-		updates["permissions"] = strings.TrimSpace(*input.Permissions)
-	}
-
-	if len(updates) > 0 {
-		if err := s.db.Model(&user).Updates(updates).Error; err != nil {
-			return nil, err
-		}
-	}
-
-	if input.RoleCodes != nil {
-		normalized := normalizeRoleCodes(*input.RoleCodes)
-		roles := make([]models.Role, 0, len(normalized))
-		if len(normalized) > 0 {
-			if err := s.db.Where("name IN ?", normalized).Find(&roles).Error; err != nil {
-				return nil, err
-			}
-			if len(roles) != len(normalized) {
-				return nil, ErrUserRoleNotFound
-			}
-		}
-		if err := s.db.Model(&user).Association("Roles").Replace(&roles); err != nil {
-			return nil, err
-		}
-	}
-
-	if err := s.db.Preload("Roles.Permissions").Where("uuid = ?", uuid).First(&user).Error; err != nil {
-		return nil, err
-	}
 	return &user, nil
+}
+
+// GetByIdentifier keeps numeric IDs compatible while supporting the UUIDs used
+// by profiles and the administration UI. Authorization belongs to the caller.
+func (s *UserService) GetByIdentifier(identifier string) (*models.User, error) {
+	identifier = strings.TrimSpace(identifier)
+	if id, err := strconv.Atoi(identifier); err == nil && id > 0 {
+		return s.GetProfileById(strconv.Itoa(id))
+	}
+	return s.GetByUUID(identifier)
+}
+
+// UpdateByUUID is retained for existing service callers.
+func (s *UserService) UpdateByUUID(uuid string, input UserUpdateInput) (*models.User, error) {
+	return s.update("uuid = ?", uuid, input)
 }
 
 func (s *UserService) UpdateByID(id string, input UserUpdateInput) (*models.User, error) {
+	return s.update("id = ?", id, input)
+}
+
+func (s *UserService) update(condition string, value interface{}, input UserUpdateInput) (*models.User, error) {
 	var user models.User
-	if err := s.db.Preload("Roles").Where("id = ?", id).First(&user).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrUserNotFound
-		}
-		return nil, err
-	}
-
-	updates := map[string]any{}
-	if input.Nickname != nil {
-		updates["nickname"] = strings.TrimSpace(*input.Nickname)
-	}
-	if input.Email != nil {
-		updates["email"] = strings.TrimSpace(*input.Email)
-	}
-	if input.AvatarURL != nil {
-		updates["avatar_url"] = strings.TrimSpace(*input.AvatarURL)
-	}
-	if input.Status != nil {
-		status := strings.TrimSpace(*input.Status)
-		if status != "active" && status != "disabled" {
-			return nil, ErrUserStatusInvalid
-		}
-		updates["status"] = status
-	}
-	if input.Permissions != nil {
-		updates["permissions"] = strings.TrimSpace(*input.Permissions)
-	}
-
-	if len(updates) > 0 {
-		if err := s.db.Model(&user).Updates(updates).Error; err != nil {
-			return nil, err
-		}
-	}
-
-	if input.RoleCodes != nil {
-		normalized := normalizeRoleCodes(*input.RoleCodes)
-		roles := make([]models.Role, 0, len(normalized))
-		if len(normalized) > 0 {
-			if err := s.db.Where("name IN ?", normalized).Find(&roles).Error; err != nil {
-				return nil, err
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Preload("Roles").Where(condition, value).First(&user).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrUserNotFound
 			}
-			if len(roles) != len(normalized) {
-				return nil, ErrUserRoleNotFound
+			return err
+		}
+		updates := map[string]interface{}{}
+		if input.Nickname != nil {
+			updates["nickname"] = strings.TrimSpace(*input.Nickname)
+		}
+		if input.Email != nil {
+			updates["email"] = strings.TrimSpace(*input.Email)
+		}
+		if input.AvatarURL != nil {
+			updates["avatar_url"] = strings.TrimSpace(*input.AvatarURL)
+		}
+		if input.Status != nil {
+			status := strings.TrimSpace(*input.Status)
+			if status != "active" && status != "disabled" {
+				return ErrUserStatusInvalid
+			}
+			updates["status"] = status
+		}
+		if input.Permissions != nil {
+			updates["permissions"] = strings.TrimSpace(*input.Permissions)
+		}
+		var roles []models.Role
+		if input.RoleCodes != nil {
+			normalized := normalizeRoleCodes(*input.RoleCodes)
+			roles = make([]models.Role, 0, len(normalized))
+			if len(normalized) > 0 {
+				if err := tx.Where("name IN ?", normalized).Find(&roles).Error; err != nil {
+					return err
+				}
+				if len(roles) != len(normalized) {
+					return ErrUserRoleNotFound
+				}
 			}
 		}
-		if err := s.db.Model(&user).Association("Roles").Replace(&roles); err != nil {
-			return nil, err
+		if len(updates) > 0 {
+			if err := tx.Model(&user).Updates(updates).Error; err != nil {
+				return err
+			}
 		}
-	}
-
-	if err := s.db.Preload("Roles.Permissions").Where("id = ?", id).First(&user).Error; err != nil {
+		if updates["status"] == "disabled" {
+			if err := tx.Model(&models.Session{}).Where("user_id = ? AND revoked_at IS NULL", user.Id).
+				Update("revoked_at", time.Now()).Error; err != nil {
+				return err
+			}
+		}
+		if input.RoleCodes != nil {
+			if err := tx.Model(&user).Association("Roles").Replace(&roles); err != nil {
+				return err
+			}
+		}
+		return tx.Preload("Roles.Permissions").First(&user, user.Id).Error
+	})
+	if err != nil {
 		return nil, err
 	}
 	return &user, nil
 }
-
 func normalizeRoleCodes(roleCodes []string) []string {
 	out := make([]string, 0, len(roleCodes))
 	seen := make(map[string]struct{}, len(roleCodes))

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 
 	"patreonoj/internal/models"
@@ -13,11 +14,12 @@ import (
 )
 
 var (
-	ErrTestCaseQuestionNotFound = errors.New("question not found")
-	ErrTestCaseNotFound         = errors.New("test case not found")
-	ErrTestCaseOSSUnavailable   = errors.New("oss unavailable")
-	ErrTestCaseInputKeyInvalid  = errors.New("input key invalid")
-	ErrTestCaseOutputKeyInvalid = errors.New("output key invalid")
+	ErrTestCaseQuestionNotFound  = errors.New("question not found")
+	ErrTestCaseNotFound          = errors.New("test case not found")
+	ErrTestCaseOSSUnavailable    = errors.New("oss unavailable")
+	ErrTestCaseInputKeyInvalid   = errors.New("input key invalid")
+	ErrTestCaseOutputKeyInvalid  = errors.New("output key invalid")
+	ErrTestCaseQuestionAmbiguous = errors.New("question_id is ambiguous; use question_pk")
 )
 
 type testCaseObjectStore interface {
@@ -38,10 +40,21 @@ type TestCaseOSSCommitInput struct {
 }
 
 func NewTestCaseService(db *gorm.DB, ossClient testCaseObjectStore) *TestCaseService {
+	if value := reflect.ValueOf(ossClient); value.IsValid() && value.Kind() == reflect.Ptr && value.IsNil() {
+		ossClient = nil
+	}
 	return &TestCaseService{
 		db:        db,
 		ossClient: ossClient,
 	}
+}
+
+func (s *TestCaseService) ListByBusinessID(questionID string) ([]models.TestCase, error) {
+	question, err := s.getQuestionByQuestionID(strings.TrimSpace(questionID))
+	if err != nil {
+		return nil, err
+	}
+	return s.listByQuery(s.db.Where("question_id = ?", question.Id))
 }
 
 func (s *TestCaseService) List(questionID *int) ([]models.TestCase, error) {
@@ -81,6 +94,8 @@ func (s *TestCaseService) CommitOSS(ctx context.Context, bucket string, input Te
 		return models.TestCase{}, err
 	}
 
+	input.InputKey = normalizeTestCaseKey(input.InputKey)
+	input.OutputKey = normalizeTestCaseKey(input.OutputKey)
 	inInfo, outInfo, err := s.validateObjectKeys(ctx, bucket, question.Id, input.InputKey, input.OutputKey)
 	if err != nil {
 		return models.TestCase{}, err
@@ -116,6 +131,8 @@ func (s *TestCaseService) UpdateOSS(ctx context.Context, bucket string, id uint,
 		return models.TestCase{}, err
 	}
 
+	input.InputKey = normalizeTestCaseKey(input.InputKey)
+	input.OutputKey = normalizeTestCaseKey(input.OutputKey)
 	inInfo, outInfo, err := s.validateObjectKeys(ctx, bucket, question.Id, input.InputKey, input.OutputKey)
 	if err != nil {
 		return models.TestCase{}, err
@@ -165,14 +182,17 @@ func (s *TestCaseService) getQuestionByID(questionID int) (models.Question, erro
 }
 
 func (s *TestCaseService) getQuestionByQuestionID(questionID string) (models.Question, error) {
-	var question models.Question
-	if err := s.db.Where("question_id = ?", questionID).First(&question).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return models.Question{}, ErrTestCaseQuestionNotFound
-		}
+	var questions []models.Question
+	if err := s.db.Where("question_id = ?", questionID).Limit(2).Find(&questions).Error; err != nil {
 		return models.Question{}, err
 	}
-	return question, nil
+	if len(questions) == 0 {
+		return models.Question{}, ErrTestCaseQuestionNotFound
+	}
+	if len(questions) > 1 {
+		return models.Question{}, ErrTestCaseQuestionAmbiguous
+	}
+	return questions[0], nil
 }
 
 func (s *TestCaseService) resolveQuestion(questionPK int, questionID string) (models.Question, error) {
@@ -206,15 +226,25 @@ func (s *TestCaseService) validateObjectKeys(ctx context.Context, bucket string,
 }
 
 func ensureQuestionPrefix(expectedPrefix, key string) error {
-	trimmed := strings.TrimLeft(strings.TrimSpace(key), "/")
+	trimmed := normalizeTestCaseKey(key)
 	if trimmed == "" {
 		return errors.New("key is empty")
+	}
+	if strings.ContainsAny(trimmed, "\\\x00") {
+		return errors.New("invalid object key")
+	}
+	for _, part := range strings.Split(trimmed, "/") {
+		if part == "" || part == "." || part == ".." {
+			return errors.New("invalid object key")
+		}
 	}
 	if !strings.HasPrefix(trimmed, expectedPrefix) {
 		return fmt.Errorf("key must start with %q", expectedPrefix)
 	}
 	return nil
 }
+
+func normalizeTestCaseKey(key string) string { return strings.TrimLeft(strings.TrimSpace(key), "/") }
 
 func (s *TestCaseService) listByQuery(query *gorm.DB) ([]models.TestCase, error) {
 	var testCases []models.TestCase

@@ -1,15 +1,14 @@
 package submission
 
 import (
+	"context"
 	"errors"
-	"log"
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 
+	"patreonoj/internal/Controllers/shared"
 	"patreonoj/internal/config"
-	"patreonoj/internal/controllers/shared"
 	"patreonoj/internal/models"
 	"patreonoj/internal/oss"
 	assessmentsvc "patreonoj/internal/services/assessment"
@@ -19,19 +18,22 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 type SubmissionController struct {
-	db              *gorm.DB
-	judgeService    *judgesvc.JudgeService
-	queryService    *submissionsvc.SubmissionQueryService
-	commandService  *submissionsvc.SubmissionCommandService
-	submissionQueue chan *models.Submission
+	db             *gorm.DB
+	judgeService   *judgesvc.JudgeService
+	queryService   *submissionsvc.SubmissionQueryService
+	commandService *submissionsvc.SubmissionCommandService
+	worker         *submissionsvc.SubmissionWorker
+	queueLimit     int
 }
 
 func NewSubmissionController(db *gorm.DB, ossClient *oss.OSS) *SubmissionController {
 	queueSize := config.GlobalConfig.Judge.QueueSize
+	if queueSize <= 0 {
+		queueSize = 100
+	}
 	bucket := config.GlobalConfig.OSS.BucketName
 	assessmentService := assessmentsvc.NewAssessmentService(db)
 	if bucket == "" {
@@ -40,14 +42,13 @@ func NewSubmissionController(db *gorm.DB, ossClient *oss.OSS) *SubmissionControl
 
 	judgeService := judgesvc.NewJudgeService(&config.GlobalConfig.Judge, db, ossClient, bucket, assessmentService)
 	controller := &SubmissionController{
-		db:              db,
-		judgeService:    judgeService,
-		queryService:    submissionsvc.NewSubmissionQueryService(db),
-		commandService:  submissionsvc.NewSubmissionCommandService(db, judgeService),
-		submissionQueue: make(chan *models.Submission, queueSize),
+		db:             db,
+		judgeService:   judgeService,
+		queryService:   submissionsvc.NewSubmissionQueryService(db),
+		commandService: submissionsvc.NewSubmissionCommandService(db, judgeService),
+		queueLimit:     queueSize,
 	}
-
-	go controller.consumeSubmissions()
+	controller.worker = submissionsvc.NewSubmissionWorker(db, judgeService)
 	return controller
 }
 
@@ -56,74 +57,38 @@ type SubmitRequest struct {
 	QuestionPK int    `json:"question_pk"`
 	QuestionID string `json:"question_id"`
 	Code       string `json:"code" binding:"required"`
+	Language   string `json:"language"`
 }
 
-func (sc *SubmissionController) consumeSubmissions() {
-	for submission := range sc.submissionQueue {
-		submission.Status = "processing"
-		if err := sc.db.Save(submission).Error; err != nil {
-			log.Printf("save submission processing status failed, submission=%s err=%v", submission.ID, err)
-			continue
-		}
-
-		if err := sc.judgeService.JudgeCode(submission); err != nil {
-			log.Printf("judge failed, submission=%s err=%v", submission.ID, err)
-			submission.Status = "error"
-			submission.ErrorCode = submissionsvc.EnsureSubmissionErrorCode(err)
-			submission.ErrorMsg = err.Error()
-			submission.Results = ""
-		}
-
-		if err := sc.db.Save(submission).Error; err != nil {
-			log.Printf("save submission result failed, submission=%s err=%v", submission.ID, err)
-		}
-
-		allCorrect := true
-		results := submissionsvc.ParseSubmissionResults(submission.Results)
-		for _, r := range results {
-			if !r.IsCorrect {
-				allCorrect = false
-				break
-			}
-		}
-		if !allCorrect || submission.Status != "completed" || len(results) == 0 {
-			continue
-		}
-
-		rec := models.UserSolvedQuestion{
-			UserUUID:   submission.UserID,
-			QuestionID: submission.QuestionID,
-			SolvedAt:   time.Now(),
-		}
-		if err := sc.db.Clauses(clause.OnConflict{
-			Columns:   []clause.Column{{Name: "user_uuid"}, {Name: "question_id"}},
-			DoNothing: true,
-		}).Create(&rec).Error; err != nil {
-			log.Printf("insert user solved record failed, user=%s question_pk=%d err=%v", rec.UserUUID, rec.QuestionID, err)
-		}
-	}
+func (sc *SubmissionController) Shutdown(ctx context.Context) error {
+	return sc.worker.Shutdown(ctx)
 }
 
 func (sc *SubmissionController) SubmitCode(c *gin.Context) {
-	user, _ := c.Get("currentUser")
+	currentUser, ok := c.Get("currentUser")
+	user, valid := currentUser.(models.User)
+	if !ok || !valid {
+		shared.APIError(c, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 1024*1024)
 	var submitRequest SubmitRequest
 	if err := c.ShouldBindJSON(&submitRequest); err != nil {
 		shared.APIError(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	var (
-		result *submissionsvc.SubmissionCreateResult
-		err    error
-	)
-	if submitRequest.QuestionPK > 0 {
-		result, err = sc.commandService.CreateSubmission(strconv.Itoa(user.(models.User).Id), submitRequest.QuestionPK, submitRequest.Code)
-	} else if qid := strings.TrimSpace(submitRequest.QuestionID); qid != "" {
-		result, err = sc.commandService.CreateSubmissionByQuestionID(strconv.Itoa(user.(models.User).Id), qid, submitRequest.Code)
-	} else {
+	if submitRequest.QuestionPK <= 0 && strings.TrimSpace(submitRequest.QuestionID) == "" {
 		shared.APIError(c, http.StatusBadRequest, "question_pk is required")
 		return
 	}
+	language := strings.ToLower(strings.TrimSpace(submitRequest.Language))
+	if language != "" && language != "go" && language != "cpp" && language != "python" && language != "java" {
+		shared.APIError(c, http.StatusBadRequest, "unsupported language")
+		return
+	}
+	result, err := sc.commandService.CreateSubmissionContext(c.Request.Context(), user.UUID, submitRequest.QuestionPK,
+		submitRequest.QuestionID, submitRequest.Code, language, sc.queueLimit)
 
 	if errors.Is(err, submissionsvc.ErrSubmissionUserNotFound) {
 		shared.APIError(c, http.StatusNotFound, "user not found")
@@ -137,13 +102,25 @@ func (sc *SubmissionController) SubmitCode(c *gin.Context) {
 		shared.APIError(c, http.StatusNotFound, "question not found")
 		return
 	}
+	if errors.Is(err, submissionsvc.ErrSubmissionCodeInvalid) || errors.Is(err, submissionsvc.ErrSubmissionQuestionAmbiguous) {
+		shared.APIError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	if errors.Is(err, submissionsvc.ErrSubmissionForbidden) {
+		shared.APIError(c, http.StatusForbidden, "permission denied")
+		return
+	}
+	if errors.Is(err, submissionsvc.ErrSubmissionQueueFull) {
+		shared.APIError(c, http.StatusTooManyRequests, "submission queue is full, please retry later")
+		return
+	}
 	if err != nil {
 		shared.APIError(c, http.StatusInternalServerError, "create submission failed")
 		return
 	}
 
 	submission := result.Submission
-	sc.submissionQueue <- submission
+	sc.worker.Notify()
 
 	shared.APIOK(c, http.StatusOK, "submission queued", gin.H{
 		"submission_id": submission.ID,
@@ -156,8 +133,18 @@ func (sc *SubmissionController) SubmitCode(c *gin.Context) {
 }
 
 func (sc *SubmissionController) GetSubmissionResult(c *gin.Context) {
+	currentUser, ok := c.Get("currentUser")
+	user, valid := currentUser.(models.User)
+	if !ok || !valid {
+		shared.APIError(c, http.StatusUnauthorized, "unauthorized")
+		return
+	}
 	submissionID := c.Param("id")
-	response, err := sc.commandService.BuildSubmissionResult(submissionID)
+	response, err := sc.commandService.BuildSubmissionResultForViewer(submissionID, user)
+	if errors.Is(err, submissionsvc.ErrSubmissionForbidden) {
+		shared.APIError(c, http.StatusForbidden, "permission denied")
+		return
+	}
 	if errors.Is(err, submissionsvc.ErrSubmissionNotFound) {
 		shared.APIError(c, http.StatusNotFound, "submission not found")
 		return
@@ -189,7 +176,13 @@ func (sc *SubmissionController) ListProblemSubmissions(c *gin.Context) {
 
 	status := strings.TrimSpace(c.Query("status"))
 	language := strings.TrimSpace(c.Query("language"))
-	result, err := sc.queryService.ListProblemSubmissions(questionID, status, language, page, size)
+	viewerUUID, isAdmin := "", false
+	if currentUser, ok := c.Get("currentUser"); ok {
+		if user, valid := currentUser.(models.User); valid {
+			viewerUUID, isAdmin = user.UUID, util.UserInstance.HasPermission(user, "admin")
+		}
+	}
+	result, err := sc.queryService.ListProblemSubmissionsForViewer(questionID, status, language, page, size, viewerUUID, isAdmin)
 	if errors.Is(err, submissionsvc.ErrSubmissionQuestionNotFound) {
 		shared.APIError(c, http.StatusNotFound, "question not found")
 		return
@@ -213,6 +206,18 @@ func (sc *SubmissionController) ListUserSubmissions(c *gin.Context) {
 	isAdmin := util.UserInstance.HasPermission(user.(models.User), "admin")
 
 	targetUUID := strings.TrimSpace(c.Param("user_id"))
+	if id, err := strconv.Atoi(targetUUID); err == nil && id > 0 {
+		var target models.User
+		if err := sc.db.First(&target, id).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				shared.APIError(c, http.StatusNotFound, "user not found")
+			} else {
+				shared.APIError(c, http.StatusInternalServerError, "query user failed")
+			}
+			return
+		}
+		targetUUID = target.UUID
+	}
 	if targetUUID == "" {
 		shared.APIError(c, http.StatusBadRequest, "invalid user_id")
 		return

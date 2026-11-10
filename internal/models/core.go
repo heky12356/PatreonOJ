@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"time"
 
 	"patreonoj/internal/config"
 
@@ -26,7 +27,7 @@ func InitDB() error {
 	case "mysql":
 		dsn := config.GlobalConfig.GetDatabaseDSN()
 		dialector = mysql.Open(dsn)
-		log.Printf("使用MySQL数据库，连接字符串: %s", dsn)
+		log.Printf("使用MySQL数据库: %s:%d/%s", config.GlobalConfig.Database.MySQL.Host, config.GlobalConfig.Database.MySQL.Port, config.GlobalConfig.Database.MySQL.DBName)
 	case "sqlite":
 		dbPath := config.GlobalConfig.GetDatabaseDSN()
 		// 确保SQLite数据库目录存在
@@ -41,7 +42,11 @@ func InitDB() error {
 
 	// 配置GORM
 	gormConfig := &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Info),
+		Logger: logger.New(log.New(os.Stdout, "", log.LstdFlags), logger.Config{
+			SlowThreshold: time.Second,
+			LogLevel: logger.Warn,
+			ParameterizedQueries: true,
+		}),
 	}
 
 	// 建立数据库连接
@@ -60,7 +65,16 @@ func InitDB() error {
 		// 设置连接池参数
 		sqlDB.SetMaxIdleConns(10)      // 最大空闲连接数
 		sqlDB.SetMaxOpenConns(100)     // 最大打开连接数
-		sqlDB.SetConnMaxLifetime(3600) // 连接最大生存时间（秒）
+		sqlDB.SetConnMaxLifetime(time.Hour)
+	} else {
+		sqlDB, err := DB.DB()
+		if err != nil {
+			return fmt.Errorf("获取数据库实例失败: %w", err)
+		}
+		sqlDB.SetMaxOpenConns(1)
+		if err := DB.Exec("PRAGMA busy_timeout = 5000").Error; err != nil {
+			return err
+		}
 	}
 
 	log.Println("数据库连接成功")

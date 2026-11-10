@@ -3,7 +3,12 @@ package config
 import (
 	"fmt"
 	"log"
+	"net"
+	"strconv"
+	"strings"
+	"time"
 
+	mysqldriver "github.com/go-sql-driver/mysql"
 	"github.com/spf13/viper"
 )
 
@@ -63,7 +68,8 @@ type SQLiteConfig struct {
 
 // GraphDatabaseConfig 图数据库配置
 type GraphDatabaseConfig struct {
-	Neo4j Neo4jConfig `mapstructure:"neo4j"`
+	Enabled bool        `mapstructure:"enabled"`
+	Neo4j   Neo4jConfig `mapstructure:"neo4j"`
 }
 
 // Neo4jConfig Neo4j配置
@@ -76,8 +82,13 @@ type Neo4jConfig struct {
 
 // ServerConfig 服务器配置
 type ServerConfig struct {
-	Port int    `mapstructure:"port"`
-	Mode string `mapstructure:"mode"`
+	Host                  string   `mapstructure:"host"`
+	Port                  int      `mapstructure:"port"`
+	Mode                  string   `mapstructure:"mode"`
+	SecureCookies         bool     `mapstructure:"secure_cookies"`
+	TrustedProxies        []string `mapstructure:"trusted_proxies"`
+	AuthMaxConcurrent     int      `mapstructure:"auth_max_concurrent"`
+	AuthRequestsPerMinute int      `mapstructure:"auth_requests_per_minute"`
 }
 
 // JudgeConfig 评测服务配置
@@ -104,6 +115,7 @@ type LocalJudgeConfig struct {
 	MaxMemory          int      `mapstructure:"max_memory"`
 	MaxTime            int      `mapstructure:"max_time"`
 	MaxOutputSize      int      `mapstructure:"max_output_size"`
+	MaxWorkSize        int      `mapstructure:"max_work_size"` // MiB, bounded tmpfs
 	SupportedLanguages []string `mapstructure:"supported_languages"`
 
 	Executor string `mapstructure:"executor"` // host/docker
@@ -118,100 +130,156 @@ var GlobalConfig *Config
 
 // InitConfig 初始化配置
 func InitConfig(configPath string) error {
-	viper.SetConfigFile(configPath)
-	viper.SetConfigType("yaml")
+	v := viper.New()
+	v.SetConfigFile(configPath)
+	v.SetConfigType("yaml")
 
 	// 设置默认值
-	setDefaults()
+	setDefaults(v)
+	v.SetEnvPrefix("PATREONOJ")
+	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+	v.AutomaticEnv()
 
 	// 读取配置文件
-	if err := viper.ReadInConfig(); err != nil {
+	if err := v.ReadInConfig(); err != nil {
 		return fmt.Errorf("读取配置文件失败: %w", err)
 	}
 
 	// 解析配置到结构体
-	GlobalConfig = &Config{}
-	if err := viper.Unmarshal(GlobalConfig); err != nil {
+	cfg := &Config{}
+	if err := v.Unmarshal(cfg); err != nil {
 		return fmt.Errorf("解析配置文件失败: %w", err)
 	}
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
+	GlobalConfig = cfg
 
 	log.Printf("配置文件加载成功: %s", configPath)
 	return nil
 }
 
 // setDefaults 设置默认配置值
-func setDefaults() {
+func setDefaults(v *viper.Viper) {
 	// 数据库默认配置
-	viper.SetDefault("database.type", "mysql")
-	viper.SetDefault("database.mysql.host", "localhost")
-	viper.SetDefault("database.mysql.port", 3306)
-	viper.SetDefault("database.mysql.charset", "utf8mb4")
-	viper.SetDefault("database.mysql.parseTime", true)
-	viper.SetDefault("database.mysql.loc", "Local")
-	viper.SetDefault("database.sqlite.path", "./data/patreon.db")
+	v.SetDefault("database.type", "mysql")
+	v.SetDefault("database.mysql.host", "localhost")
+	v.SetDefault("database.mysql.port", 3306)
+	v.SetDefault("database.mysql.charset", "utf8mb4")
+	v.SetDefault("database.mysql.parseTime", true)
+	v.SetDefault("database.mysql.loc", "Local")
+	v.SetDefault("database.sqlite.path", "./data/patreon.db")
 
 	// 服务器默认配置
-	viper.SetDefault("server.port", 8080)
-	viper.SetDefault("server.mode", "debug")
+	v.SetDefault("server.port", 8080)
+	v.SetDefault("server.host", "127.0.0.1")
+	v.SetDefault("server.secure_cookies", false)
+	v.SetDefault("server.trusted_proxies", []string{})
+	v.SetDefault("server.auth_max_concurrent", 2)
+	v.SetDefault("server.auth_requests_per_minute", 20)
+	v.SetDefault("server.mode", "debug")
 
 	// 评测服务默认配置
-	viper.SetDefault("judge.mode", "local")
-	viper.SetDefault("judge.timeout", 15)
-	viper.SetDefault("judge.queue_size", 100)
-	viper.SetDefault("judge.local.enabled", true)
-	viper.SetDefault("judge.local.sandbox_dir", "./sandbox")
-	viper.SetDefault("judge.local.max_memory", 128)
-	viper.SetDefault("judge.local.max_time", 5000)
-	viper.SetDefault("judge.local.max_output_size", 1024)
-	viper.SetDefault("judge.local.supported_languages", []string{"go", "python", "cpp", "java"})
+	v.SetDefault("judge.mode", "local")
+	v.SetDefault("judge.timeout", 15)
+	v.SetDefault("judge.queue_size", 100)
+	v.SetDefault("judge.local.enabled", true)
+	v.SetDefault("judge.local.sandbox_dir", "./sandbox")
+	v.SetDefault("judge.local.max_memory", 128)
+	v.SetDefault("judge.local.max_time", 5000)
+	v.SetDefault("judge.local.max_output_size", 1024)
+	v.SetDefault("judge.local.max_work_size", 256)
+	v.SetDefault("judge.local.supported_languages", []string{"go", "python", "cpp", "java"})
 
-	viper.SetDefault("judge.go_judge.max_memory", 256)
-	viper.SetDefault("judge.go_judge.max_time", 5000)
-	viper.SetDefault("judge.local.executor", "host")
-	viper.SetDefault("judge.local.docker_image_go", "golang:1.22-bookworm")
-	viper.SetDefault("judge.local.docker_image_cpp", "gcc:13-bookworm")
-	viper.SetDefault("judge.local.docker_image_python", "python:3.12-bookworm")
-	viper.SetDefault("judge.local.docker_image_java", "eclipse-temurin:21-jdk")
+	v.SetDefault("judge.go_judge.max_memory", 256)
+	v.SetDefault("judge.go_judge.max_time", 5000)
+	v.SetDefault("judge.local.executor", "docker")
+	v.SetDefault("judge.local.docker_image_go", "golang:1.22-bookworm")
+	v.SetDefault("judge.local.docker_image_cpp", "gcc:13-bookworm")
+	v.SetDefault("judge.local.docker_image_python", "python:3.12-bookworm")
+	v.SetDefault("judge.local.docker_image_java", "eclipse-temurin:21-jdk")
 
 	// Oss默认公开读取前缀
-	viper.SetDefault("oss.public_read_prefixes", []string{})
+	v.SetDefault("oss.public_read_prefixes", []string{})
 
 	// 图数据库默认配置
-	viper.SetDefault("graph_database.neo4j.uri", "bolt://localhost:7687")
-	viper.SetDefault("graph_database.neo4j.username", "neo4j")
-	viper.SetDefault("graph_database.neo4j.password", "password")
-	viper.SetDefault("graph_database.neo4j.database", "neo4j")
+	v.SetDefault("graph_database.enabled", false)
+	v.SetDefault("graph_database.neo4j.uri", "bolt://localhost:7687")
+	v.SetDefault("graph_database.neo4j.username", "neo4j")
+	v.SetDefault("graph_database.neo4j.password", "password")
+	v.SetDefault("graph_database.neo4j.database", "neo4j")
 
 	// AI服务默认配置
-	viper.SetDefault("ai.enabled", false)
-	viper.SetDefault("ai.base_url", "https://api.openai.com/v1") // 默认OpenAI地址
-	viper.SetDefault("ai.model", "gpt-3.5-turbo")
-	viper.SetDefault("ai.temperature", 0.7)
+	v.SetDefault("ai.enabled", false)
+	v.SetDefault("ai.base_url", "https://api.openai.com/v1") // 默认OpenAI地址
+	v.SetDefault("ai.model", "gpt-3.5-turbo")
+	v.SetDefault("ai.temperature", 0.7)
 }
 
 // GetDatabaseDSN 根据配置类型获取数据库连接字符串
 func (c *Config) GetDatabaseDSN() string {
 	switch c.Database.Type {
 	case "mysql":
-		return fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=%s&parseTime=%t&loc=%s",
-			c.Database.MySQL.Username,
-			c.Database.MySQL.Password,
-			c.Database.MySQL.Host,
-			c.Database.MySQL.Port,
-			c.Database.MySQL.DBName,
-			c.Database.MySQL.Charset,
-			c.Database.MySQL.ParseTime,
-			c.Database.MySQL.Loc,
-		)
+		cfg := mysqldriver.NewConfig()
+		cfg.User, cfg.Passwd = c.Database.MySQL.Username, c.Database.MySQL.Password
+		cfg.Net, cfg.Addr = "tcp", net.JoinHostPort(c.Database.MySQL.Host, strconv.Itoa(c.Database.MySQL.Port))
+		cfg.DBName, cfg.ParseTime = c.Database.MySQL.DBName, c.Database.MySQL.ParseTime
+		cfg.Loc, _ = time.LoadLocation(c.Database.MySQL.Loc)
+		if cfg.Loc == nil {
+			cfg.Loc = time.Local
+		}
+		cfg.Params = map[string]string{"charset": c.Database.MySQL.Charset}
+		cfg.Timeout, cfg.ReadTimeout, cfg.WriteTimeout = 5*time.Second, 10*time.Second, 10*time.Second
+		return cfg.FormatDSN()
 	case "sqlite":
 		return c.Database.SQLite.Path
 	default:
-		log.Fatalf("不支持的数据库类型: %s", c.Database.Type)
 		return ""
 	}
 }
 
+func (c *Config) Validate() error {
+	c.Database.Type = strings.ToLower(strings.TrimSpace(c.Database.Type))
+	if c.Database.Type != "mysql" && c.Database.Type != "sqlite" {
+		return fmt.Errorf("不支持的数据库类型: %s", c.Database.Type)
+	}
+	if c.Database.Type == "mysql" {
+		if _, err := time.LoadLocation(c.Database.MySQL.Loc); err != nil {
+			return fmt.Errorf("数据库时区配置错误: %w", err)
+		}
+	}
+	if c.Server.Port <= 0 || c.Server.Port > 65535 {
+		return fmt.Errorf("server.port must be between 1 and 65535")
+	}
+	if c.Server.AuthMaxConcurrent < 1 || c.Server.AuthMaxConcurrent > 8 || c.Server.AuthRequestsPerMinute < 1 {
+		return fmt.Errorf("server.auth_max_concurrent must be between 1 and 8; auth_requests_per_minute must be positive")
+	}
+	if c.Judge.Local.MaxWorkSize < 16 || c.Judge.Local.MaxWorkSize > 1024 {
+		return fmt.Errorf("judge.local.max_work_size must be between 16 and 1024 MiB")
+	}
+	if c.Server.Mode != "debug" && c.Server.Mode != "release" && c.Server.Mode != "test" {
+		return fmt.Errorf("server.mode must be debug, release or test")
+	}
+	c.Judge.Mode = strings.ToLower(strings.TrimSpace(c.Judge.Mode))
+	if c.Judge.Mode != "local" && c.Judge.Mode != "remote" {
+		return fmt.Errorf("judge.mode must be local or remote")
+	}
+	if c.Judge.Timeout <= 0 || c.Judge.QueueSize <= 0 {
+		return fmt.Errorf("judge.timeout and judge.queue_size must be positive")
+	}
+	if c.Judge.Local.MaxTime <= 0 || c.Judge.Local.MaxMemory <= 0 || c.Judge.Local.MaxOutputSize <= 0 || c.Judge.GoJudge.MaxTime <= 0 || c.Judge.GoJudge.MaxMemory <= 0 {
+		return fmt.Errorf("judge limits must be positive")
+	}
+	if c.Judge.Mode == "local" && (!c.Judge.Local.Enabled || strings.ToLower(strings.TrimSpace(c.Judge.Local.Executor)) != "docker") {
+		return fmt.Errorf("local judge requires enabled=true and executor=docker")
+	}
+	if c.Judge.Mode == "remote" && (!c.Judge.GoJudge.Enabled || strings.TrimSpace(c.Judge.GoJudge.APIURL) == "") {
+		return fmt.Errorf("remote judge requires go_judge.enabled=true and a valid api_url")
+	}
+	return nil
+}
+
 // GetServerAddr 获取服务器地址
 func (c *Config) GetServerAddr() string {
-	return fmt.Sprintf(":%d", c.Server.Port)
+	return net.JoinHostPort(c.Server.Host, strconv.Itoa(c.Server.Port))
 }

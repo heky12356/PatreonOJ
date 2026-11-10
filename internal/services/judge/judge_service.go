@@ -3,9 +3,11 @@ package judge
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -15,324 +17,281 @@ import (
 	assessmentsvc "patreonoj/internal/services/assessment"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
+var ErrSubmissionStale = errors.New("submission is no longer owned by this judge attempt")
+
 type JudgeService struct {
-	DB                *gorm.DB            // 数据库连接
-	HTTPClient        *http.Client        // HTTP客户端
-	LocalJudgeService *LocalJudgeService  // 本地评测服务
-	GoJudgeClient     *GoJudgeClient      // Go-Judge 客户端
-	Config            *config.JudgeConfig // 评测配置
+	DB                *gorm.DB
+	HTTPClient        *http.Client
+	LocalJudgeService *LocalJudgeService
+	GoJudgeClient     *GoJudgeClient
+	Config            *config.JudgeConfig
 	OSSClient         *oss.OSS
 	OSSBucket         string
-
-	// 图相关的服务和评估服务
 	AssessmentService *assessmentsvc.AssessmentService
 }
 
-// NewJudgeService 创建评测服务实例
-func NewJudgeService(cfg *config.JudgeConfig, db *gorm.DB, ossClient *oss.OSS, ossBucket string,
-	assessmentService *assessmentsvc.AssessmentService,
-) *JudgeService {
-	timeout := time.Duration(cfg.Timeout) * time.Second
-
-	var localJudge *LocalJudgeService
-	if cfg.Mode == "local" && cfg.Local.Enabled {
-		localJudge = NewLocalJudgeService(&cfg.Local)
+func NewJudgeService(cfg *config.JudgeConfig, db *gorm.DB, ossClient *oss.OSS, ossBucket string, assessmentService *assessmentsvc.AssessmentService) *JudgeService {
+	if cfg == nil {
+		cfg = &config.JudgeConfig{Timeout: 15}
 	}
-
-	var goJudgeClient *GoJudgeClient
+	timeout := cfg.Timeout
+	if timeout <= 0 {
+		timeout = 15
+	}
+	service := &JudgeService{DB: db, Config: cfg, OSSClient: ossClient, OSSBucket: ossBucket, AssessmentService: assessmentService, HTTPClient: &http.Client{Timeout: time.Duration(timeout) * time.Second}}
+	if cfg.Local.Enabled {
+		service.LocalJudgeService = NewLocalJudgeService(&cfg.Local)
+	}
 	if cfg.GoJudge.Enabled {
-		goJudgeClient = NewGoJudgeClient(cfg.GoJudge.APIURL, cfg.Timeout)
+		service.GoJudgeClient = NewGoJudgeClient(cfg.GoJudge.APIURL, timeout)
+		service.GoJudgeClient.Token = cfg.GoJudge.Token
 	}
-
-	return &JudgeService{
-		DB:                db,
-		Config:            cfg,
-		LocalJudgeService: localJudge,
-		GoJudgeClient:     goJudgeClient,
-		OSSClient:         ossClient,
-		OSSBucket:         ossBucket,
-		AssessmentService: assessmentService,
-		HTTPClient: &http.Client{
-			Timeout: timeout,
-		},
-	}
+	return service
 }
 
-// JudgeCode 执行代码评测
 func (js *JudgeService) JudgeCode(submission *models.Submission) error {
-	// 1. 验证提交状态
-	if submission.Status == "completed" {
-		return fmt.Errorf("提交已完成评测，无需重复评测")
-	}
-
-	// 2. 获取测试用例
-	testCases, err := js.getTestCases(submission.QuestionID)
-	if err != nil {
-		return fmt.Errorf("获取测试用例失败: %w", err)
-	}
-
-	// 3. 准备评测
-	submission.Status = "processing"
-	if err = js.DB.Save(submission).Error; err != nil {
-		return fmt.Errorf("更新提交状态失败: %w", err)
-	}
-
-	log.Print("debug")
-
-	// 4. 执行评测
-	results, err := js.executeJudgement(submission.Code, testCases)
-	if err != nil {
-		return fmt.Errorf("执行评测失败: %w", err)
-	}
-
-	var maxRuntime int64
-	var maxMem int64
-	for _, r := range results {
-		if r.Runtime > maxRuntime {
-			maxRuntime = r.Runtime
-		}
-		if r.MemoryUsage > maxMem {
-			maxMem = r.MemoryUsage
-		}
-	}
-
-	if submission.Language == "" {
-		submission.Language = js.detectLanguage(submission.Code)
-	}
-	if submission.CodeLength == 0 {
-		submission.CodeLength = len(submission.Code)
-	}
-	submission.RuntimeMs = maxRuntime
-	submission.MemoryKB = maxMem
-
-	// 5. 保存结果
-	resultsJSON, err := json.Marshal(results)
-	if err != nil {
-		return fmt.Errorf("序列化测试结果失败: %w", err)
-	}
-	submission.Results = string(resultsJSON)
-	submission.Status = "completed"
-	if err := js.DB.Save(submission).Error; err != nil {
-		return fmt.Errorf("保存评测结果失败: %w", err)
-	}
-
-	// 6. 如果评测通过，触发能力评估更新
-	isAc := true
-	for _, r := range results {
-		if !r.IsCorrect {
-			isAc = false
-			break
-		}
-	}
-
-	if isAc {
-		if err := js.AssessmentService.UpdateUserMasteryBasedOnResult(submission.UserID, submission.QuestionID, true); err != nil {
-			log.Printf("更新用户的掌握度失败: %v", err)
-		}
-	}
-
-	return nil
+	return js.JudgeCodeContext(context.Background(), submission)
 }
 
-// executeJudgement 执行实际评测逻辑
-func (js *JudgeService) executeJudgement(code string, testCases []models.TestCase) ([]models.TestCaseResult, error) {
-	// 本地优先模式
-	if js.Config.Mode == "local" && js.LocalJudgeService != nil {
-		log.Printf("Local judge mode enabled")
-		return js.executeLocalJudgement(code, testCases)
+func (js *JudgeService) JudgeCodeContext(ctx context.Context, submission *models.Submission) error {
+	if js == nil || js.DB == nil || js.Config == nil || submission == nil {
+		return errors.New("judge service is not configured")
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	var current models.Submission
+	if err := js.DB.WithContext(ctx).Where("id = ?", submission.ID).First(&current).Error; err != nil {
+		return err
+	}
+	if current.Status == "completed" {
+		*submission = current
+		return nil
+	}
+	if current.Status == "pending" {
+		claimed := js.DB.WithContext(ctx).Model(&models.Submission{}).Where("id = ? AND status = ? AND updated_at = ?", current.ID, "pending", current.UpdatedAt).Update("status", "processing")
+		if claimed.Error != nil {
+			return claimed.Error
+		}
+		if claimed.RowsAffected != 1 {
+			return ErrSubmissionStale
+		}
+		if err := js.DB.WithContext(ctx).Where("id = ?", current.ID).First(&current).Error; err != nil {
+			return err
+		}
+		*submission = current
+	} else if current.Status != "processing" || submission.Status != "processing" || !current.UpdatedAt.Equal(submission.UpdatedAt) {
+		return ErrSubmissionStale
+	}
+	lease := current.UpdatedAt
+	var question models.Question
+	if err := js.DB.WithContext(ctx).Where("id = ?", current.QuestionID).First(&question).Error; err != nil {
+		return fmt.Errorf("load submission question: %w", err)
+	}
+	testCases, err := js.getTestCasesContext(ctx, current.QuestionID)
+	if err != nil {
+		return err
+	}
+	language := strings.ToLower(strings.TrimSpace(current.Language))
+	if language == "" {
+		language = js.detectLanguage(current.Code)
+	}
+	if language != "go" && language != "cpp" && language != "python" && language != "java" {
+		return fmt.Errorf("unsupported language: %s", language)
+	}
+	inputs, expected := make([]string, 0, len(testCases)), make([]string, 0, len(testCases))
+	totalBytes := 0
+	for _, tc := range testCases {
+		in, out, err := js.loadTestCaseIO(ctx, tc)
+		if err != nil {
+			return err
+		}
+		totalBytes += len(in) + len(out)
+		if totalBytes > 64*1024*1024 {
+			return errors.New("testcase input/output exceeds submission size limit")
+		}
+		inputs = append(inputs, in)
+		expected = append(expected, normalizeOutput(out))
+	}
+	timeLimit, memoryLimit := js.problemLimits(question)
+	results, err := js.executeJudgement(ctx, current.Code, language, inputs, timeLimit, memoryLimit)
+	if err != nil {
+		return fmt.Errorf("execute judgement failed: %w", err)
+	}
+	if len(results) != len(testCases) {
+		return fmt.Errorf("judge response count mismatch: got=%d want=%d", len(results), len(testCases))
+	}
+	allCorrect := len(results) > 0
+	var runtime, memory int64
+	for i := range results {
+		r := &results[i]
+		r.IsCorrect = r.IsCorrect && normalizeOutput(r.ActualOutput) == expected[i]
+		r.Input = inputs[i]
+		r.ExpectedOutput = expected[i]
+		r.TestCaseID = testCases[i].ID
+		r.Hidden = testCases[i].IsHidden
+		if r.Hidden {
+			r.Input = ""
+			r.ExpectedOutput = ""
+			r.ActualOutput = ""
+		}
+		allCorrect = allCorrect && r.IsCorrect
+		runtime = max(runtime, r.Runtime)
+		memory = max(memory, r.MemoryUsage)
+	}
+	data, err := json.Marshal(results)
+	if err != nil {
+		return err
+	}
+	err = js.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		updated := tx.Model(&models.Submission{}).Where("id = ? AND status = ? AND updated_at = ?", current.ID, "processing", lease).Updates(map[string]interface{}{
+			"status": "completed", "results": string(data), "runtime_ms": runtime, "memory_kb": memory, "language": language, "code_length": len(current.Code), "error_code": "", "error_msg": "",
+		})
+		if updated.Error != nil {
+			return updated.Error
+		}
+		if updated.RowsAffected != 1 {
+			return ErrSubmissionStale
+		}
+		if !allCorrect {
+			return nil
+		}
+		solved := models.UserSolvedQuestion{UserUUID: current.UserID, QuestionID: current.QuestionID, SolvedAt: time.Now()}
+		if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "user_uuid"}, {Name: "question_id"}}, DoNothing: true}).Create(&solved).Error; err != nil {
+			return err
+		}
+		return assessmentsvc.NewAssessmentService(tx).UpdateUserMasteryBasedOnResult(current.UserID, current.QuestionID, true)
+	})
+	if err != nil {
+		return fmt.Errorf("save judgement transaction: %w", err)
+	}
+	return js.DB.WithContext(ctx).Where("id = ?", current.ID).First(submission).Error
+}
 
-	// 远程评测
-	results, err := js.executeRemoteJudgement(code, testCases)
+func (js *JudgeService) executeJudgement(ctx context.Context, code, language string, inputs []string, timeLimit, memoryLimit int) ([]models.TestCaseResult, error) {
+	local := func() ([]models.TestCaseResult, error) {
+		if js.LocalJudgeService == nil || js.LocalJudgeService.Config == nil {
+			return nil, errors.New("local judge is not configured")
+		}
+		cfg := *js.LocalJudgeService.Config
+		cfg.MaxTime = timeLimit
+		cfg.MaxMemory = memoryLimit
+		return NewLocalJudgeService(&cfg).JudgeBatchContext(ctx, code, inputs, language)
+	}
+	if js.Config.Mode == "local" {
+		return local()
+	}
+	if js.GoJudgeClient == nil {
+		return nil, errors.New("go-judge client is not initialized")
+	}
+	results, err := js.GoJudgeClient.RunContext(ctx, code, language, inputs, int64(timeLimit), int64(memoryLimit))
 	if err == nil {
 		return results, nil
 	}
-
-	// 远程失败时，如果本地评测可用则自动降级
-	if js.LocalJudgeService != nil {
-		log.Printf("remote judge failed, fallback to local judge: %v", err)
-		return js.executeLocalJudgement(code, testCases)
-	}
-	return nil, err
-}
-
-// loadTestCaseIO 加载测试用例的输入和输出
-func (js *JudgeService) loadTestCaseIO(ctx context.Context, tc models.TestCase) (string, string, error) {
-	if js.OSSClient == nil || js.OSSBucket == "" {
-		return "", "", fmt.Errorf("oss is not configured")
-	}
-	if strings.TrimSpace(tc.InputKey) == "" || strings.TrimSpace(tc.OutputKey) == "" {
-		return "", "", fmt.Errorf("testcase key is empty")
-	}
-
-	inputBytes, err := js.OSSClient.GetObjectBytes(ctx, js.OSSBucket, tc.InputKey)
-	if err != nil {
-		return "", "", fmt.Errorf("read testcase input failed(key=%s): %w", tc.InputKey, err)
-	}
-	outputBytes, err := js.OSSClient.GetObjectBytes(ctx, js.OSSBucket, tc.OutputKey)
-	if err != nil {
-		return "", "", fmt.Errorf("read testcase output failed(key=%s): %w", tc.OutputKey, err)
-	}
-
-	return string(inputBytes), strings.TrimSpace(string(outputBytes)), nil
-}
-
-// executeLocalJudgement 执行本地评测
-func (js *JudgeService) executeLocalJudgement(code string, testCases []models.TestCase) ([]models.TestCaseResult, error) {
-	// 检测编程语言（简单实现，可以根据代码内容或用户选择来确定）
-	language := js.detectLanguage(code)
-	log.Printf("Detected language: %s", language)
-
-	// 检查是否支持该语言
-	if !js.LocalJudgeService.IsLanguageSupported(language) {
-		return nil, fmt.Errorf("不支持的编程语言: %s", language)
-	}
-
-	inputs := make([]string, 0, len(testCases))
-	expectedList := make([]string, 0, len(testCases))
-	ctx := context.Background()
-	for _, tc := range testCases {
-		input, expected, err := js.loadTestCaseIO(ctx, tc)
-		if err != nil {
-			return nil, err
-		}
-		inputs = append(inputs, input)
-		expectedList = append(expectedList, expected)
-	}
-
-	batch, err := js.LocalJudgeService.JudgeBatch(code, inputs, language)
-	if err != nil {
+	var compileErr *CompileError
+	if errors.As(err, &compileErr) || ctx.Err() != nil || js.LocalJudgeService == nil || strings.ToLower(js.LocalJudgeService.Config.Executor) != "docker" {
 		return nil, err
 	}
-	if len(batch) != len(inputs) {
-		return nil, fmt.Errorf("本地评测结果数量不匹配: got=%d want=%d", len(batch), len(inputs))
-	}
-
-	results := make([]models.TestCaseResult, 0, len(batch))
-	for i := range batch {
-		r := batch[i]
-		r.Input = inputs[i]
-		r.ExpectedOutput = normalizeOutput(expectedList[i])
-		r.IsCorrect = strings.TrimSpace(normalizeOutput(r.ActualOutput)) == r.ExpectedOutput
-		results = append(results, r)
-	}
-
-	return results, nil
+	log.Printf("remote judge unavailable, using configured docker judge: %v", err)
+	return local()
 }
 
-// normalizeOutput 标准化输出格式
-func normalizeOutput(s string) string {
-	s = strings.ReplaceAll(s, "\r\n", "\n")
-	s = strings.ReplaceAll(s, "\r", "\n")
-	s = strings.TrimSpace(s)
+func (js *JudgeService) problemLimits(question models.Question) (int, int) {
+	timeLimit, memoryLimit := question.TimeLimit, question.MemoryLimit
+	if timeLimit <= 0 {
+		timeLimit = js.Config.GoJudge.MaxTime
+		if js.Config.Mode == "local" {
+			timeLimit = js.Config.Local.MaxTime
+		}
+	}
+	if memoryLimit <= 0 {
+		memoryLimit = js.Config.GoJudge.MaxMemory
+		if js.Config.Mode == "local" {
+			memoryLimit = js.Config.Local.MaxMemory
+		}
+	}
+	if timeLimit <= 0 {
+		timeLimit = 2000
+	}
+	if memoryLimit <= 0 {
+		memoryLimit = 256
+	}
+	return timeLimit, memoryLimit
+}
 
-	lines := strings.Split(s, "\n")
+func (js *JudgeService) loadTestCaseIO(ctx context.Context, tc models.TestCase) (string, string, error) {
+	if js.OSSClient == nil || js.OSSBucket == "" {
+		return "", "", errors.New("oss is not configured")
+	}
+	if strings.TrimSpace(tc.InputKey) == "" || strings.TrimSpace(tc.OutputKey) == "" {
+		return "", "", errors.New("testcase key is empty")
+	}
+	if tc.InputSize > 16*1024*1024 || tc.OutputSize > 16*1024*1024 {
+		return "", "", errors.New("testcase file exceeds size limit")
+	}
+	input, err := js.OSSClient.GetObjectBytes(ctx, js.OSSBucket, tc.InputKey)
+	if err != nil {
+		return "", "", fmt.Errorf("read testcase input failed: %w", err)
+	}
+	output, err := js.OSSClient.GetObjectBytes(ctx, js.OSSBucket, tc.OutputKey)
+	if err != nil {
+		return "", "", fmt.Errorf("read testcase output failed: %w", err)
+	}
+	return string(input), string(output), nil
+}
+
+func normalizeOutput(s string) string {
+	s = strings.ReplaceAll(strings.ReplaceAll(s, "\r\n", "\n"), "\r", "\n")
+	lines := strings.Split(strings.TrimSpace(s), "\n")
 	for i := range lines {
 		lines[i] = strings.TrimRight(lines[i], " \t")
 	}
 	return strings.Join(lines, "\n")
 }
 
-// executeRemoteJudgement 执行远程API评测 (Go-Judge)
-func (js *JudgeService) executeRemoteJudgement(code string, testCases []models.TestCase) ([]models.TestCaseResult, error) {
-	if js.GoJudgeClient == nil {
-		return nil, fmt.Errorf("go-judge client is not initialized")
-	}
+func (js *JudgeService) DetectLanguage(code string) string { return js.detectLanguage(code) }
 
-	// 1. 准备输入数据
-	inputs := make([]string, 0, len(testCases))
-	expectedList := make([]string, 0, len(testCases))
-	ctx := context.Background()
+var javaDeclaration = regexp.MustCompile(`\b(?:public\s+)?class\s+[A-Za-z_$][A-Za-z0-9_$]*`)
+var pythonStatement = regexp.MustCompile(`(?m)^\s*(?:from\s+\w|import\s+\w|def\s+\w|print\s*\(|[A-Za-z_].*=.*input\s*\()`)
 
-	for _, tc := range testCases {
-		input, expected, err := js.loadTestCaseIO(ctx, tc)
-		if err != nil {
-			return nil, err
-		}
-		inputs = append(inputs, input)
-		expectedList = append(expectedList, expected)
-	}
-
-	// 2. 检测语言
-	language := js.detectLanguage(code)
-
-	// 3. 调用 Go-Judge (批量执行)
-	memLimit := int64(js.Config.GoJudge.MaxMemory)
-	if memLimit == 0 {
-		memLimit = 256
-	}
-	timeLimit := int64(js.Config.GoJudge.MaxTime)
-	if timeLimit == 0 {
-		timeLimit = 5000
-	}
-
-	results, err := js.GoJudgeClient.Run(code, language, inputs, timeLimit, memLimit)
-	if err != nil {
-		return nil, fmt.Errorf("go-judge execution failed: %w", err)
-	}
-
-	// 4. 比对结果
-	for i := range results {
-		// GoJudgeClient 已经填好了 Runtime, Memory, ActualOutput (maybe error message)
-		// 我们需要比对 ExpectedOutput
-		if results[i].ActualOutput == "Time Limit Exceeded" ||
-			results[i].ActualOutput == "Memory Limit Exceeded" ||
-			strings.HasPrefix(results[i].ActualOutput, "Runtime Error") ||
-			strings.HasPrefix(results[i].ActualOutput, "Compile Error") ||
-			strings.HasPrefix(results[i].ActualOutput, "Error") {
-			results[i].IsCorrect = false
-		} else {
-			results[i].ExpectedOutput = normalizeOutput(expectedList[i])
-			results[i].ActualOutput = strings.TrimSpace(results[i].ActualOutput)
-			// 标准化 Output
-			results[i].IsCorrect = strings.TrimSpace(normalizeOutput(results[i].ActualOutput)) == results[i].ExpectedOutput
-		}
-	}
-
-	return results, nil
-}
-
-func (js *JudgeService) DetectLanguage(code string) string {
-	return js.detectLanguage(code)
-}
-
-// detectLanguage 检测编程语言（简单实现）
 func (js *JudgeService) detectLanguage(code string) string {
-	// 简单的语言检测逻辑，实际项目中可以更复杂
-	if strings.Contains(code, "package main") || strings.Contains(code, "func main()") {
+	if strings.Contains(code, "package main") || strings.Contains(code, "func main(") {
 		return "go"
-	} else if strings.Contains(code, "def ") || strings.Contains(code, "import ") {
-		return "python"
-	} else if strings.Contains(code, "#include") || strings.Contains(code, "int main()") {
-		return "cpp"
-	} else if strings.Contains(code, "public class") || strings.Contains(code, "public static void main") {
+	}
+	if javaDeclaration.MatchString(code) && (strings.Contains(code, "static void main") || strings.Contains(code, "import java.") || strings.Contains(code, "public class")) {
 		return "java"
 	}
-
-	// 默认返回Go语言
+	if strings.Contains(code, "#include") || strings.Contains(code, "int main(") || strings.Contains(code, "using namespace std") {
+		return "cpp"
+	}
+	if pythonStatement.MatchString(code) || strings.Contains(code, "print(") || strings.Contains(code, "input(") || strings.Contains(code, "sys.stdin") {
+		return "python"
+	}
 	return "go"
 }
 
-// getTestCases 获取题目测试用例
 func (js *JudgeService) getTestCases(questionID int) ([]models.TestCase, error) {
-	var testCases []models.TestCase
+	return js.getTestCasesContext(context.Background(), questionID)
+}
 
-	if err := js.DB.Where("question_id = ? AND is_hidden = ?", questionID, false).
-		Find(&testCases).Error; err != nil {
+func (js *JudgeService) getTestCasesContext(ctx context.Context, questionID int) ([]models.TestCase, error) {
+	var cases []models.TestCase
+	if err := js.DB.WithContext(ctx).Where("question_id = ?", questionID).Order("id ASC").Limit(1025).Find(&cases).Error; err != nil {
 		return nil, fmt.Errorf("query testcases failed: %w", err)
 	}
-
-	if len(testCases) == 0 {
-		return nil, fmt.Errorf("question has no available testcases")
+	if len(cases) == 0 {
+		return nil, errors.New("question has no available testcases")
 	}
-
-	for _, tc := range testCases {
+	if len(cases) > 1024 {
+		return nil, errors.New("testcase count exceeds submission limit")
+	}
+	for _, tc := range cases {
 		if strings.TrimSpace(tc.InputKey) == "" || strings.TrimSpace(tc.OutputKey) == "" {
-			return nil, fmt.Errorf("testcase record is not oss-based")
+			return nil, errors.New("testcase record is not oss-based")
 		}
 	}
-
-	return testCases, nil
+	return cases, nil
 }

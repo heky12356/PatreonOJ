@@ -1,452 +1,264 @@
 package judge
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
-	"io/ioutil"
-	"log"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"patreonoj/internal/config"
 	"patreonoj/internal/models"
 )
 
-// LocalJudgeService 本地评测服务
 type LocalJudgeService struct {
 	Config     *config.LocalJudgeConfig
 	SandboxDir string
 }
 
-// NewLocalJudgeService 创建本地评测服务实例
 func NewLocalJudgeService(cfg *config.LocalJudgeConfig) *LocalJudgeService {
-	return &LocalJudgeService{
-		Config:     cfg,
-		SandboxDir: cfg.SandboxDir,
-	}
+	return &LocalJudgeService{Config: cfg, SandboxDir: cfg.SandboxDir}
 }
 
 func (ljs *LocalJudgeService) JudgeBatch(code string, inputs []string, language string) ([]models.TestCaseResult, error) {
-	executor := strings.ToLower(strings.TrimSpace(ljs.Config.Executor))
-	if executor == "docker" {
-		return ljs.judgeBatchDocker(code, inputs, language)
-	}
-
-	results := make([]models.TestCaseResult, 0, len(inputs))
-	for _, input := range inputs {
-		r, err := ljs.JudgeCode(code, input, language)
-		if err != nil {
-			r = &models.TestCaseResult{Input: input, ActualOutput: fmt.Sprintf("Error: %v", err), IsCorrect: false, Runtime: 0, MemoryUsage: 0}
-		}
-		results = append(results, *r)
-	}
-	return results, nil
+	return ljs.JudgeBatchContext(context.Background(), code, inputs, language)
 }
 
-// JudgeCode 本地评测代码（兼容旧接口：单 case）
-func (ljs *LocalJudgeService) JudgeCode(code, input, language string) (*models.TestCaseResult, error) {
-	log.Print("start judge code")
+func (ljs *LocalJudgeService) JudgeBatchContext(ctx context.Context, code string, inputs []string, language string) ([]models.TestCaseResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if ljs == nil || ljs.Config == nil {
+		return nil, errors.New("local judge is not configured")
+	}
+	if strings.ToLower(strings.TrimSpace(ljs.Config.Executor)) != "docker" {
+		return nil, errors.New("host judge is disabled: configure the docker executor or go-judge to isolate untrusted code")
+	}
+	if len(inputs) == 0 {
+		return nil, errors.New("no test cases supplied")
+	}
+	if !ljs.IsLanguageSupported(language) {
+		return nil, fmt.Errorf("unsupported language: %s", language)
+	}
+	return ljs.judgeBatchDocker(ctx, code, inputs, language)
+}
 
+func (ljs *LocalJudgeService) JudgeCode(code, input, language string) (*models.TestCaseResult, error) {
 	results, err := ljs.JudgeBatch(code, []string{input}, language)
 	if err != nil {
 		return nil, err
 	}
-	if len(results) != 1 {
-		return nil, fmt.Errorf("本地评测结果数量异常")
-	}
-	out := results[0]
-	return &out, nil
-}
-
-// createSandbox 创建沙箱目录
-func (ljs *LocalJudgeService) createSandbox() (string, error) {
-	sandboxPath := filepath.Join(ljs.Config.SandboxDir, fmt.Sprintf("sandbox_%d", time.Now().UnixNano()))
-
-	// 创建沙箱目录
-	err := os.MkdirAll(sandboxPath, 0o755)
-	if err != nil {
-		return "", fmt.Errorf("创建沙箱目录失败: %w", err)
-	}
-
-	// 验证目录是否创建成功
-	if _, err := os.Stat(sandboxPath); os.IsNotExist(err) {
-		return "", fmt.Errorf("沙箱目录创建后不存在: %s", sandboxPath)
-	}
-
-	return sandboxPath, nil
-}
-
-// cleanupSandbox 清理沙箱目录
-func (ljs *LocalJudgeService) cleanupSandbox(sandboxPath string) {
-	os.RemoveAll(sandboxPath)
-}
-
-// writeCodeFile 写入代码文件
-func (ljs *LocalJudgeService) writeCodeFile(sandboxPath, code, language string) (string, error) {
-	log.Printf("write code file, language: %s", language)
-	var filename string
-	switch language {
-	case "go":
-		filename = "main.go"
-	case "python":
-		filename = "main.py"
-	case "cpp":
-		filename = "main.cpp"
-	case "java":
-		filename = "Main.java"
-	default:
-		return "", fmt.Errorf("不支持的语言: %s", language)
-	}
-
-	codeFile := filepath.Join(sandboxPath, filename)
-
-	log.Printf("write code file: %s", codeFile)
-
-	// 确保目录存在
-	if err := os.MkdirAll(filepath.Dir(codeFile), 0o755); err != nil {
-		return "", fmt.Errorf("创建目录失败: %w", err)
-	}
-
-	// 写入文件
-	err := ioutil.WriteFile(codeFile, []byte(code), 0o644)
-	if err != nil {
-		return "", fmt.Errorf("写入文件失败: %w", err)
-	}
-
-	// 验证文件是否存在
-	if _, err := os.Stat(codeFile); os.IsNotExist(err) {
-		return "", fmt.Errorf("文件写入后不存在: %s", codeFile)
-	}
-
-	return codeFile, nil
+	return &results[0], nil
 }
 
 func (ljs *LocalJudgeService) dockerImageForLanguage(language string) string {
-	lang := strings.ToLower(strings.TrimSpace(language))
-	switch lang {
+	switch language {
 	case "go":
-		if strings.TrimSpace(ljs.Config.DockerImageGo) != "" {
-			return strings.TrimSpace(ljs.Config.DockerImageGo)
+		if ljs.Config.DockerImageGo != "" {
+			return ljs.Config.DockerImageGo
 		}
 		return "golang:1.22-bookworm"
 	case "cpp":
-		if strings.TrimSpace(ljs.Config.DockerImageCpp) != "" {
-			return strings.TrimSpace(ljs.Config.DockerImageCpp)
+		if ljs.Config.DockerImageCpp != "" {
+			return ljs.Config.DockerImageCpp
 		}
 		return "gcc:13-bookworm"
 	case "python":
-		if strings.TrimSpace(ljs.Config.DockerImagePython) != "" {
-			return strings.TrimSpace(ljs.Config.DockerImagePython)
+		if ljs.Config.DockerImagePython != "" {
+			return ljs.Config.DockerImagePython
 		}
 		return "python:3.12-bookworm"
 	case "java":
-		if strings.TrimSpace(ljs.Config.DockerImageJava) != "" {
-			return strings.TrimSpace(ljs.Config.DockerImageJava)
+		if ljs.Config.DockerImageJava != "" {
+			return ljs.Config.DockerImageJava
 		}
 		return "eclipse-temurin:21-jdk"
-	default:
-		return ""
 	}
+	return ""
 }
 
-func (ljs *LocalJudgeService) dockerMountSpec(hostDir string) (string, error) {
-	abs, err := filepath.Abs(hostDir)
+func (ljs *LocalJudgeService) judgeBatchDocker(ctx context.Context, code string, inputs []string, language string) ([]models.TestCaseResult, error) {
+	filename := map[string]string{"go": "main.go", "cpp": "main.cpp", "python": "main.py", "java": "Main.java"}[language]
+	container := "oj_" + uuid.NewString()
+	memory := ljs.Config.MaxMemory
+	if memory <= 0 {
+		memory = 256
+	}
+	compileMemory := max(memory, 512)
+	workSize := ljs.Config.MaxWorkSize
+	if workSize <= 0 {
+		workSize = 256
+	}
+	args := []string{"run", "-d", "--rm", "--name", container, "--network", "none", "--cpus", "1", "--memory", strconv.Itoa(compileMemory) + "m", "--memory-swap", strconv.Itoa(compileMemory) + "m", "--pids-limit", "64", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--read-only", "--user", "65534:65534", "--tmpfs", "/tmp:rw,nosuid,nodev,size=256m,mode=1777", "--tmpfs", fmt.Sprintf("/work:rw,exec,nosuid,nodev,size=%dm,mode=1777", workSize), "-w", "/work", "-e", "HOME=/tmp", "-e", "GOCACHE=/tmp/go-build", "-e", "GOMODCACHE=/tmp/go-mod", "-e", "GO111MODULE=off", "-e", "GOTOOLCHAIN=local", "-e", "GOMAXPROCS=2", "--entrypoint", "sh", ljs.dockerImageForLanguage(language), "-c", "while true; do sleep 3600; done"}
+	// Register cleanup before creation: a cancelled CLI may still have created a container.
+	defer ljs.removeContainer(container)
+	createCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	out, stderr, _, err := runBoundedCommand(createCtx, "", nil, 64*1024, "docker", args...)
+	cancel()
 	if err != nil {
-		return "", err
+		return nil, fmt.Errorf("docker run failed: %w: %s%s", err, out, stderr)
 	}
-	abs = filepath.ToSlash(abs)
-	return abs + ":/work:rw", nil
-}
-
-func (ljs *LocalJudgeService) dockerRunDetached(ctx context.Context, containerName string, image string, mount string) error {
-	mem := strings.TrimSpace(strconv.Itoa(ljs.Config.MaxMemory))
-	if mem == "" || mem == "0" {
-		mem = "128"
-	}
-	maxTime := ljs.Config.MaxTime
-	if maxTime <= 0 {
-		maxTime = 5
-	}
-
-	args := []string{
-		"run", "-d", "--rm",
-		"--name", containerName,
-		"--network", "none",
-		"--cpus", "1",
-		"--memory", mem + "m",
-		"--pids-limit", "64",
-		"--read-only",
-		"--tmpfs", "/tmp:rw,size=64m",
-		"-v", mount,
-		"-w", "/work",
-		image,
-		"sh", "-c", "while true; do sleep 3600; done",
-	}
-	cmd := exec.CommandContext(ctx, "docker", args...)
-	out, err := cmd.CombinedOutput()
+	// Source travels through stdin. Untrusted code never receives a writable host
+	// directory; /work and /tmp are bounded tmpfs mounts charged to the memory limit.
+	copyCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	_, stderr, _, err = ljs.dockerExec(copyCtx, container, code, 4096, "sh", "-c", "cat > "+filename)
+	cancel()
 	if err != nil {
-		return fmt.Errorf("docker run failed: %v, output: %s", err, string(out))
+		return nil, fmt.Errorf("copy source into sandbox: %w: %s", err, stderr)
 	}
-	return nil
-}
-
-func (ljs *LocalJudgeService) dockerRemove(ctx context.Context, containerName string) {
-	_ = exec.CommandContext(ctx, "docker", "rm", "-f", containerName).Run()
-}
-
-func (ljs *LocalJudgeService) dockerExec(ctx context.Context, containerName string, stdin string, args ...string) (string, error) {
-	base := []string{"exec", "-i", containerName}
-	base = append(base, args...)
-	cmd := exec.CommandContext(ctx, "docker", base...)
-	if stdin != "" {
-		cmd.Stdin = strings.NewReader(stdin)
-	}
-	out, err := cmd.CombinedOutput()
-	return string(out), err
-}
-
-func (ljs *LocalJudgeService) judgeBatchDocker(code string, inputs []string, language string) ([]models.TestCaseResult, error) {
-	image := ljs.dockerImageForLanguage(language)
-	if image == "" {
-		return nil, fmt.Errorf("不支持的语言: %s", language)
-	}
-
-	sandboxPath, err := ljs.createSandbox()
-	if err != nil {
-		return nil, fmt.Errorf("创建沙箱失败: %w", err)
-	}
-	defer ljs.cleanupSandbox(sandboxPath)
-
-	codeFile, err := ljs.writeCodeFile(sandboxPath, code, language)
-	if err != nil {
-		return nil, fmt.Errorf("写入代码文件失败: %w", err)
-	}
-
-	mount, err := ljs.dockerMountSpec(sandboxPath)
-	if err != nil {
-		return nil, err
-	}
-
-	containerName := fmt.Sprintf("oj_%d", time.Now().UnixNano())
-	runCtx, cancelRun := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancelRun()
-	if err := ljs.dockerRunDetached(runCtx, containerName, image, mount); err != nil {
-		return nil, err
-	}
-	defer ljs.dockerRemove(context.Background(), containerName)
-
-	compileErr := ""
-	filename := filepath.Base(codeFile)
-	compileTimeout := time.Duration(ljs.Config.MaxTime)
-	if compileTimeout <= 0 {
-		compileTimeout = 5
-	}
-	compileTimeout = (compileTimeout * time.Second) + 15*time.Second
-	cctx, cancelCompile := context.WithTimeout(context.Background(), compileTimeout)
-	defer cancelCompile()
-	switch strings.ToLower(strings.TrimSpace(language)) {
+	var compileArgs []string
+	switch language {
 	case "go":
-		_, err = ljs.dockerExec(cctx, containerName, "", "go", "build", "-o", "main", filename)
+		compileArgs = []string{"go", "build", "-o", "main", filename}
 	case "cpp":
-		_, err = ljs.dockerExec(cctx, containerName, "", "g++", "-O2", "-std=c++17", "-o", "main", filename)
+		compileArgs = []string{"g++", "-O2", "-std=c++17", "-o", "main", filename}
 	case "java":
-		_, err = ljs.dockerExec(cctx, containerName, "", "javac", filename)
-	case "python":
-		err = nil
-	default:
-		err = fmt.Errorf("不支持的语言: %s", language)
+		compileArgs = []string{"javac", filename}
 	}
+	if len(compileArgs) > 0 {
+		compileCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		_, stderr, overflow, compileErr := ljs.dockerExec(compileCtx, container, "", 64*1024, compileArgs...)
+		cancel()
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if compileErr != nil || overflow {
+			return nil, &CompileError{Message: strings.TrimSpace(fmt.Sprint(compileErr) + " " + stderr)}
+		}
+	}
+	// Compilation has a separate budget; execution must use the problem's memory limit.
+	// Discard compiler caches before lowering the cgroup budget: tmpfs consumes RAM.
+	cleanCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	_, stderr, _, err = ljs.dockerExec(cleanCtx, container, "", 4096, "sh", "-c", "rm -rf /tmp/go-build /tmp/go-mod")
+	cancel()
 	if err != nil {
-		compileErr = fmt.Sprintf("Compile Error: %v", err)
+		return nil, fmt.Errorf("clear compiler cache: %w: %s", err, stderr)
 	}
-
-	maxOutput := ljs.Config.MaxOutputSize
-	if maxOutput <= 0 {
-		maxOutput = 1024
+	updateCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	_, stderr, _, err = runBoundedCommand(updateCtx, "", nil, 64*1024, "docker", "update", "--memory", strconv.Itoa(memory)+"m", "--memory-swap", strconv.Itoa(memory)+"m", container)
+	cancel()
+	if err != nil {
+		return nil, fmt.Errorf("set judge memory limit: %w: %s", err, stderr)
 	}
-	caseTimeoutSec := ljs.Config.MaxTime
-	if caseTimeoutSec <= 0 {
-		caseTimeoutSec = 5
+	timeLimit := ljs.caseTimeLimit()
+	outputLimit := ljs.Config.MaxOutputSize
+	if outputLimit <= 0 {
+		outputLimit = 1024
 	}
-
 	results := make([]models.TestCaseResult, 0, len(inputs))
 	for _, input := range inputs {
-		if compileErr != "" {
-			results = append(results, models.TestCaseResult{Input: input, ActualOutput: compileErr, IsCorrect: false, Runtime: 0, MemoryUsage: 0})
-			continue
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
-
-		runArgs := []string{"timeout", "-k", "1s", fmt.Sprintf("%ds", caseTimeoutSec)}
-		switch strings.ToLower(strings.TrimSpace(language)) {
+		runArgs := []string{"timeout", "-k", "1s", fmt.Sprintf("%.3fs", timeLimit.Seconds())}
+		switch language {
 		case "go", "cpp":
 			runArgs = append(runArgs, "./main")
 		case "python":
-			runArgs = append(runArgs, "python", "-u", filename)
+			runArgs = append(runArgs, "python3", "-u", filename)
 		case "java":
-			runArgs = append(runArgs, "java", "-cp", ".", "Main")
+			runArgs = append(runArgs, "java", "-XX:+UseSerialGC", fmt.Sprintf("-Xmx%dm", max(16, memory/2)), "-cp", ".", "Main")
 		}
-
+		runCtx, cancel := context.WithTimeout(ctx, timeLimit+2*time.Second)
 		start := time.Now()
-		rctx, cancel := context.WithTimeout(context.Background(), time.Duration(caseTimeoutSec+2)*time.Second)
-		out, runErr := ljs.dockerExec(rctx, containerName, input, runArgs...)
+		stdout, stderr, overflow, runErr := ljs.dockerExec(runCtx, container, input, outputLimit*1024, runArgs...)
+		deadline := errors.Is(runCtx.Err(), context.DeadlineExceeded)
 		cancel()
-		runtime := time.Since(start).Milliseconds()
-
-		actual := strings.TrimSpace(out)
-		if len(actual) > maxOutput*1024 {
-			actual = actual[:maxOutput*1024] + "...[输出被截断]"
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
 		}
-
+		result := models.TestCaseResult{Input: input, ActualOutput: strings.TrimSpace(stdout), Runtime: time.Since(start).Milliseconds(), IsCorrect: runErr == nil && !overflow}
+		if overflow {
+			result.ActualOutput = "Output Limit Exceeded"
+			results = append(results, result)
+			// Kill the whole sandbox so an output flood cannot survive the cancelled CLI.
+			for len(results) < len(inputs) {
+				results = append(results, models.TestCaseResult{ActualOutput: "Output Limit Exceeded"})
+			}
+			return results, nil
+		}
 		if runErr != nil {
-			if strings.Contains(actual, "Time") || strings.Contains(actual, "exceeded") {
-				actual = "Time Limit Exceeded"
-			} else if actual == "" {
-				actual = fmt.Sprintf("Runtime Error: %v", runErr)
+			var exitErr *exec.ExitError
+			if deadline || (errors.As(runErr, &exitErr) && (exitErr.ExitCode() == 124 || exitErr.ExitCode() == 137)) {
+				result.ActualOutput = "Time Limit Exceeded"
+			} else {
+				result.ActualOutput = "Runtime Error: " + strings.TrimSpace(fmt.Sprint(runErr)+" "+stderr)
 			}
 		}
-
-		results = append(results, models.TestCaseResult{Input: input, ActualOutput: actual, IsCorrect: false, Runtime: runtime, MemoryUsage: 0})
+		results = append(results, result)
 	}
-
 	return results, nil
 }
 
-// compileCode 编译代码
-func (ljs *LocalJudgeService) compileCode(sandboxPath, codeFile, language string) (string, error) {
-	var cmd *exec.Cmd
-	var executablePath string
-
-	log.Printf("开始编译，沙箱路径: %s", sandboxPath)
-	log.Printf("源文件路径: %s", codeFile)
-
-	// 验证源文件是否存在
-	if _, err := os.Stat(codeFile); os.IsNotExist(err) {
-		return "", fmt.Errorf("源文件不存在: %s", codeFile)
+func (ljs *LocalJudgeService) caseTimeLimit() time.Duration {
+	ms := ljs.Config.MaxTime
+	if ms <= 0 {
+		ms = 5000
 	}
-
-	// 获取相对于沙箱目录的文件名
-	filename := filepath.Base(codeFile)
-	log.Printf("文件名: %s", filename)
-
-	switch language {
-	case "go":
-		executablePath = filepath.Join(sandboxPath, "main.exe")
-		// 使用相对路径编译
-		cmd = exec.Command("go", "build", "-o", "main.exe", filename)
-	case "cpp":
-		executablePath = filepath.Join(sandboxPath, "main.exe")
-		// 使用相对路径编译
-		cmd = exec.Command("g++", "-o", "main.exe", filename)
-	case "java":
-		// Java编译后的类文件
-		cmd = exec.Command("javac", filename)
-		executablePath = filepath.Join(sandboxPath, "Main.class")
-	case "python":
-		// Python不需要编译
-		return codeFile, nil
-	default:
-		return "", fmt.Errorf("不支持的语言: %s", language)
-	}
-
-	// 设置工作目录为沙箱目录，这样就可以使用相对路径
-	cmd.Dir = sandboxPath
-	log.Printf("编译命令: %v", cmd.Args)
-	log.Printf("工作目录: %s", cmd.Dir)
-
-	output, err := cmd.CombinedOutput()
-	log.Printf("编译输出: %s", string(output))
-
-	if err != nil {
-		log.Printf("编译失败: %v", err)
-		return "", fmt.Errorf("编译错误: %s", string(output))
-	}
-
-	// 验证编译产物是否存在
-	if language != "python" {
-		if _, err := os.Stat(executablePath); os.IsNotExist(err) {
-			return "", fmt.Errorf("编译产物不存在: %s", executablePath)
-		}
-	}
-
-	log.Printf("编译成功，可执行文件: %s", executablePath)
-	return executablePath, nil
+	return time.Duration(ms) * time.Millisecond
 }
 
-// executeCode 执行代码
-func (ljs *LocalJudgeService) executeCode(sandboxPath, executablePath, input, language string) (*models.TestCaseResult, error) {
-	var cmd *exec.Cmd
+func (ljs *LocalJudgeService) dockerExec(ctx context.Context, container, input string, limit int, args ...string) (string, string, bool, error) {
+	cli := append([]string{"exec", "-i", container}, args...)
+	return runBoundedCommand(ctx, "", strings.NewReader(input), limit, "docker", cli...)
+}
 
-	log.Printf("开始执行，沙箱路径: %s", sandboxPath)
-	log.Printf("可执行文件路径: %s", executablePath)
-
-	// 获取相对于沙箱目录的可执行文件名
-	executableName := filepath.Base(executablePath)
-	log.Printf("可执行文件名: %s", executableName)
-
-	switch language {
-	case "go", "cpp":
-		// 使用相对路径执行
-		cmd = exec.Command(".\\" + executableName)
-	case "python":
-		// Python使用相对路径
-		pythonFile := filepath.Base(executablePath)
-		cmd = exec.Command("python", pythonFile)
-	case "java":
-		cmd = exec.Command("java", "-cp", ".", "Main")
-	default:
-		return nil, fmt.Errorf("不支持的语言: %s", language)
-	}
-
-	log.Printf("执行命令: %v", cmd.Args)
-
-	// 创建上下文以控制超时
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(ljs.Config.MaxTime)*time.Second)
+func (ljs *LocalJudgeService) removeContainer(container string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-
-	// 使用上下文执行命令
-	cmd = exec.CommandContext(ctx, cmd.Args[0], cmd.Args[1:]...)
-	cmd.Dir = sandboxPath
-	cmd.Stdin = strings.NewReader(input)
-
-	log.Printf("最终执行命令: %v", cmd.Args)
-	log.Printf("工作目录: %s", cmd.Dir)
-
-	startTime := time.Now()
-	output, err := cmd.CombinedOutput()
-	runtime := time.Since(startTime).Milliseconds()
-
-	result := &models.TestCaseResult{
-		Input:        input,
-		ActualOutput: strings.TrimSpace(string(output)),
-		Runtime:      runtime,
-		MemoryUsage:  0, // 简单实现，暂不统计内存使用
-	}
-
-	if err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
-			result.ActualOutput = "Time Limit Exceeded"
-		} else {
-			result.ActualOutput = fmt.Sprintf("Runtime Error: %v", err)
-		}
-		result.IsCorrect = false
-	}
-
-	// 检查输出大小限制
-	if len(result.ActualOutput) > ljs.Config.MaxOutputSize*1024 {
-		result.ActualOutput = result.ActualOutput[:ljs.Config.MaxOutputSize*1024] + "...[输出被截断]"
-	}
-
-	return result, nil
+	_, _, _, _ = runBoundedCommand(ctx, "", nil, 4096, "docker", "rm", "-f", container)
 }
 
-// IsLanguageSupported 检查是否支持指定语言
+// limitedBuffer cancels execution as soon as the capture limit is exceeded.
+type limitedBuffer struct {
+	mu       sync.Mutex
+	buffer   bytes.Buffer
+	limit    int
+	overflow bool
+	cancel   context.CancelFunc
+}
+
+func (b *limitedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	n := len(p)
+	remaining := max(0, b.limit-b.buffer.Len())
+	if n > remaining {
+		b.buffer.Write(p[:remaining])
+		b.overflow = true
+		b.cancel()
+	} else {
+		b.buffer.Write(p)
+	}
+	return n, nil
+}
+
+func runBoundedCommand(parent context.Context, dir string, stdin interface{ Read([]byte) (int, error) }, limit int, program string, args ...string) (string, string, bool, error) {
+	ctx, cancel := context.WithCancel(parent)
+	defer cancel()
+	stdout := &limitedBuffer{limit: limit, cancel: cancel}
+	stderr := &limitedBuffer{limit: min(limit, 64*1024), cancel: cancel}
+	cmd := exec.CommandContext(ctx, program, args...)
+	cmd.Dir = dir
+	cmd.Stdin = stdin
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	cmd.WaitDelay = time.Second
+	err := cmd.Run()
+	return stdout.buffer.String(), stderr.buffer.String(), stdout.overflow || stderr.overflow, err
+}
+
 func (ljs *LocalJudgeService) IsLanguageSupported(language string) bool {
-	for _, lang := range ljs.Config.SupportedLanguages {
-		if lang == language {
+	if len(ljs.Config.SupportedLanguages) == 0 {
+		return language == "go" || language == "cpp" || language == "python" || language == "java"
+	}
+	for _, allowed := range ljs.Config.SupportedLanguages {
+		if allowed == language {
 			return true
 		}
 	}

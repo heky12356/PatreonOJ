@@ -96,10 +96,12 @@ func (o *OSS) GetObjectBytes(ctx context.Context, bucket, key string) ([]byte, e
 	}
 	defer obj.Close()
 
-	b, err := io.ReadAll(obj)
+	const maxTestFileSize = 16 << 20
+	b, err := io.ReadAll(io.LimitReader(obj, maxTestFileSize+1))
 	if err != nil {
 		return nil, err
 	}
+	if len(b) > maxTestFileSize { return nil, errors.New("testcase object exceeds 16 MiB") }
 	return b, nil
 }
 

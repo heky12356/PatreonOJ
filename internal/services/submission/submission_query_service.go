@@ -47,6 +47,10 @@ func NewSubmissionQueryService(db *gorm.DB) *SubmissionQueryService {
 }
 
 func (s *SubmissionQueryService) ListProblemSubmissions(questionID int, status, language string, page, size int) (*SubmissionPage, error) {
+	return s.ListProblemSubmissionsForViewer(questionID, status, language, page, size, "", false)
+}
+
+func (s *SubmissionQueryService) ListProblemSubmissionsForViewer(questionID int, status, language string, page, size int, viewerUUID string, isAdmin bool) (*SubmissionPage, error) {
 	var question models.Question
 	if err := s.db.Where("id = ?", questionID).First(&question).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -54,13 +58,15 @@ func (s *SubmissionQueryService) ListProblemSubmissions(questionID int, status, 
 		}
 		return nil, err
 	}
+	if !isAdmin && question.Status != "published" { return nil, ErrSubmissionQuestionNotFound }
 
-	return s.listProblemSubmissionsByQuestion(question, status, language, page, size)
+	return s.listProblemSubmissionsByQuestion(question, status, language, page, size, viewerUUID, isAdmin)
 }
 
-func (s *SubmissionQueryService) listProblemSubmissionsByQuestion(question models.Question, status, language string, page, size int) (*SubmissionPage, error) {
+func (s *SubmissionQueryService) listProblemSubmissionsByQuestion(question models.Question, status, language string, page, size int, viewerUUID string, isAdmin bool) (*SubmissionPage, error) {
 
 	countQ := s.db.Table("submissions").Joins("JOIN question ON question.id = submissions.question_id").Where("submissions.question_id = ?", question.Id)
+	if !isAdmin { countQ = countQ.Where("submissions.is_public = ? OR submissions.user_id = ?", true, viewerUUID) }
 	if status != "" {
 		countQ = countQ.Where("submissions.status = ?", status)
 	}
@@ -78,6 +84,7 @@ func (s *SubmissionQueryService) listProblemSubmissionsByQuestion(question model
 		Select("submissions.id AS submission_id, submissions.user_id, question.question_id, question.id AS question_pk, submissions.created_at AS submitted_at, submissions.status, submissions.runtime_ms, submissions.memory_kb, submissions.language, submissions.code_length").
 		Joins("JOIN question ON question.id = submissions.question_id").
 		Where("submissions.question_id = ?", question.Id)
+	if !isAdmin { listQ = listQ.Where("submissions.is_public = ? OR submissions.user_id = ?", true, viewerUUID) }
 	if status != "" {
 		listQ = listQ.Where("submissions.status = ?", status)
 	}
@@ -163,13 +170,15 @@ func (s *SubmissionQueryService) resolveProblemID(problemID string) (*int, error
 	}
 
 	n, err := strconv.Atoi(v)
-	if err != nil {
+	if err != nil || n <= 0 {
 		return nil, ErrSubmissionProblemIDInvalid
 	}
 
 	var q models.Question
 	if err := s.db.Where("id = ?", n).First(&q).Error; err == nil {
 		return &q.Id, nil
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
 	}
 	return &n, nil
 }

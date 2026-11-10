@@ -1,0 +1,25 @@
+[Unit]
+Description=PatreonOJ API and judge worker
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=patreonoj
+Group=patreonoj
+SupplementaryGroups=docker
+WorkingDirectory=/opt/patreonoj/PatreonOJ
+ExecStart=/opt/patreonoj/PatreonOJ/bin/patreonoj
+Restart=always
+RestartSec=5
+TimeoutStopSec=40
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/opt/patreonoj/PatreonOJ/data
+EnvironmentFile=-/etc/patreonoj.env
+
+[Install]
+WantedBy=multi-user.target

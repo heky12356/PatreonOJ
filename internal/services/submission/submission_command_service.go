@@ -1,25 +1,36 @@
 package submission
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"strings"
+	"sync"
 
 	"patreonoj/internal/models"
 	judgesvc "patreonoj/internal/services/judge"
+	"patreonoj/internal/util"
 
 	"gorm.io/gorm"
 )
 
 var (
-	ErrSubmissionUserNotFound = errors.New("user not found")
-	ErrSubmissionUserDisabled = errors.New("user disabled")
-	ErrSubmissionNotFound     = errors.New("submission not found")
+	ErrSubmissionUserNotFound      = errors.New("user not found")
+	ErrSubmissionUserDisabled      = errors.New("user disabled")
+	ErrSubmissionNotFound          = errors.New("submission not found")
+	ErrSubmissionForbidden         = errors.New("submission access denied")
+	ErrSubmissionCodeInvalid       = errors.New("code must contain between 1 and 262144 bytes")
+	ErrSubmissionQueueFull         = errors.New("submission queue is full")
+	ErrSubmissionQuestionAmbiguous = errors.New("question_id is ambiguous; use question_pk")
 )
+
+const MaxCodeBytes = 256 * 1024
 
 type SubmissionCommandService struct {
 	db           *gorm.DB
 	judgeService *judgesvc.JudgeService
+	createMu     sync.Mutex
 }
 
 func NewSubmissionCommandService(db *gorm.DB, judgeService *judgesvc.JudgeService) *SubmissionCommandService {
@@ -36,8 +47,18 @@ type SubmissionCreateResult struct {
 }
 
 func (s *SubmissionCommandService) CreateSubmission(userID string, questionPK int, code string) (*SubmissionCreateResult, error) {
+	return s.CreateSubmissionContext(context.Background(), userID, questionPK, "", code, "", 0)
+}
+
+func (s *SubmissionCommandService) CreateSubmissionContext(ctx context.Context, userID string, questionPK int, questionID, code, language string, queueLimit int) (*SubmissionCreateResult, error) {
+	if strings.TrimSpace(code) == "" || len(code) > MaxCodeBytes {
+		return nil, ErrSubmissionCodeInvalid
+	}
+	s.createMu.Lock()
+	defer s.createMu.Unlock()
+	db := s.db.WithContext(ctx)
 	var user models.User
-	if err := s.db.Where("uuid = ?", userID).First(&user).Error; err != nil {
+	if err := db.Preload("Roles.Permissions").Where("uuid = ?", userID).First(&user).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrSubmissionUserNotFound
 		}
@@ -48,20 +69,46 @@ func (s *SubmissionCommandService) CreateSubmission(userID string, questionPK in
 	}
 
 	var question models.Question
-	if err := s.db.Where("id = ?", questionPK).First(&question).Error; err != nil {
+	query := db.Where("id = ?", questionPK)
+	if questionPK <= 0 {
+		var matches []models.Question
+		if err := db.Where("question_id = ?", strings.TrimSpace(questionID)).Order("id ASC").Limit(2).Find(&matches).Error; err != nil {
+			return nil, err
+		}
+		if len(matches) == 0 {
+			return nil, ErrSubmissionQuestionNotFound
+		}
+		if len(matches) != 1 {
+			return nil, ErrSubmissionQuestionAmbiguous
+		}
+		query = db.Where("id = ?", matches[0].Id)
+	}
+	if err := query.First(&question).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrSubmissionQuestionNotFound
 		}
 		return nil, err
 	}
+	if question.Status != "published" && !util.UserInstance.HasPermission(user, "admin") {
+		return nil, ErrSubmissionForbidden
+	}
+	if queueLimit > 0 {
+		var pending int64
+		if err := db.Model(&models.Submission{}).Where("status = ?", "pending").Count(&pending).Error; err != nil {
+			return nil, err
+		}
+		if pending >= int64(queueLimit) {
+			return nil, ErrSubmissionQueueFull
+		}
+	}
 
-	lang := ""
-	if s.judgeService != nil {
+	lang := language
+	if lang == "" && s.judgeService != nil {
 		lang = s.judgeService.DetectLanguage(code)
 	}
 
 	submission := models.NewSubmission(userID, question.Id, code, lang)
-	if err := s.db.Create(submission).Error; err != nil {
+	if err := db.Create(submission).Error; err != nil {
 		return nil, err
 	}
 
@@ -77,23 +124,27 @@ func (s *SubmissionCommandService) CreateSubmissionByQuestionNumber(userID strin
 }
 
 func (s *SubmissionCommandService) CreateSubmissionByQuestionID(userID string, questionID string, code string) (*SubmissionCreateResult, error) {
-	var question models.Question
-	if err := s.db.Where("question_id = ?", strings.TrimSpace(questionID)).Order("id ASC").First(&question).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrSubmissionQuestionNotFound
-		}
-		return nil, err
-	}
-	return s.CreateSubmission(userID, question.Id, code)
+	return s.CreateSubmissionContext(context.Background(), userID, 0, questionID, code, "", 0)
 }
 
 func (s *SubmissionCommandService) BuildSubmissionResult(submissionID string) (map[string]interface{}, error) {
+	return s.buildSubmissionResult(submissionID, nil)
+}
+
+func (s *SubmissionCommandService) BuildSubmissionResultForViewer(submissionID string, viewer models.User) (map[string]interface{}, error) {
+	return s.buildSubmissionResult(submissionID, &viewer)
+}
+
+func (s *SubmissionCommandService) buildSubmissionResult(submissionID string, viewer *models.User) (map[string]interface{}, error) {
 	var submission models.Submission
 	if err := s.db.Where("id = ?", submissionID).First(&submission).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrSubmissionNotFound
 		}
 		return nil, err
+	}
+	if viewer != nil && viewer.UUID != submission.UserID && !util.UserInstance.HasPermission(*viewer, "admin") && !submission.IsPublic {
+		return nil, ErrSubmissionForbidden
 	}
 
 	response := map[string]interface{}{
@@ -107,6 +158,9 @@ func (s *SubmissionCommandService) BuildSubmissionResult(submissionID string) (m
 
 	var question models.Question
 	if err := s.db.Where("id = ?", submission.QuestionID).First(&question).Error; err == nil {
+		if viewer != nil && question.Status != "published" && !util.UserInstance.HasPermission(*viewer, "admin") {
+			return nil, ErrSubmissionForbidden
+		}
 		response["question_pk"] = question.Id
 		response["question_id"] = question.QuestionId
 	}
@@ -114,6 +168,30 @@ func (s *SubmissionCommandService) BuildSubmissionResult(submissionID string) (m
 	switch submission.Status {
 	case "completed":
 		results := parseSubmissionResults(submission.Results)
+		// Visibility may have changed since judging. Missing/deleted cases and
+		// historical records without an ID are private by default.
+		caseIDs := make([]uint, 0, len(results))
+		for _, result := range results {
+			if result.TestCaseID != 0 {
+				caseIDs = append(caseIDs, result.TestCaseID)
+			}
+		}
+		visible := make(map[uint]bool)
+		for start := 0; start < len(caseIDs); start += 500 {
+			var cases []models.TestCase
+			if err := s.db.Select("id", "is_hidden").Where("question_id = ? AND id IN ?", submission.QuestionID, caseIDs[start:min(start+500, len(caseIDs))]).Find(&cases).Error; err != nil {
+				return nil, err
+			}
+			for _, testcase := range cases {
+				visible[testcase.ID] = !testcase.IsHidden
+			}
+		}
+		for i := range results {
+			if results[i].Hidden || !visible[results[i].TestCaseID] {
+				results[i].Hidden = true
+				results[i].Input, results[i].ExpectedOutput, results[i].ActualOutput = "", "", ""
+			}
+		}
 		if len(results) == 0 {
 			response["results"] = []models.TestCaseResult{}
 			response["pass_rate"] = 0.0
@@ -133,6 +211,9 @@ func (s *SubmissionCommandService) BuildSubmissionResult(submissionID string) (m
 		response["pass_rate"] = float64(passed) / float64(len(results))
 		response["total_cases"] = len(results)
 		response["passed_cases"] = passed
+	case "pending":
+		response["results"] = []models.TestCaseResult{}
+		response["message"] = "代码已进入评测队列，请稍后重试"
 	case "processing":
 		response["results"] = []models.TestCaseResult{}
 		response["message"] = "代码正在评测中，请稍后重试"
@@ -187,6 +268,10 @@ func friendlySubmissionErrorMessage(errorCode string) string {
 func EnsureSubmissionErrorCode(err error) string {
 	if err == nil {
 		return ""
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) || errors.Is(err, context.DeadlineExceeded) {
+		return "E005"
 	}
 	msg := strings.ToLower(err.Error())
 	switch {

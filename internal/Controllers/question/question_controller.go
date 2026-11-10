@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"patreonoj/internal/controllers/shared"
+	"patreonoj/internal/Controllers/shared"
 	"patreonoj/internal/models"
 	questionsvc "patreonoj/internal/services/question"
 	"patreonoj/internal/util"
@@ -103,17 +103,13 @@ func (con *QuestionController) Store(c *gin.Context) {
 		Tags:        request.Tags,
 		Status:      request.Status,
 	})
-	if errors.Is(err, questionsvc.ErrQuestionIDRequired) {
-		shared.APIError(c, http.StatusBadRequest, "question_id is required")
+	if errors.Is(err, questionsvc.ErrQuestionIDRequired) || errors.Is(err, questionsvc.ErrQuestionInvalidInput) {
+		shared.APIError(c, http.StatusBadRequest, err.Error())
 		return
 	}
 	if err != nil {
 		shared.APIError(c, http.StatusInternalServerError, "create question failed: "+err.Error())
 		return
-	}
-
-	if con.edgeBuilder != nil {
-		con.edgeBuilder.Enqueue(question.Id)
 	}
 
 	shared.APIOK(c, http.StatusCreated, "create question success", gin.H{"data": question})
@@ -126,12 +122,20 @@ func (con *QuestionController) Show(c *gin.Context) {
 		return
 	}
 	id, err := strconv.Atoi(idStr)
-	if err != nil {
+	if err != nil || id <= 0 {
 		shared.APIError(c, http.StatusBadRequest, "invalid question id")
 		return
 	}
 
 	question, err := con.service.GetByID(id)
+	if errors.Is(err, questionsvc.ErrQuestionRecordNotFound) {
+		shared.APIError(c, http.StatusNotFound, "question not found")
+		return
+	}
+	if err != nil {
+		shared.APIError(c, http.StatusInternalServerError, "query question failed")
+		return
+	}
 
 	user, ok := c.Get("currentUser")
 	isAdmin := false
@@ -140,15 +144,6 @@ func (con *QuestionController) Show(c *gin.Context) {
 	}
 	if !isAdmin && question.Status != "published" {
 		shared.APIError(c, http.StatusForbidden, "没有权限")
-		return
-	}
-
-	if errors.Is(err, questionsvc.ErrQuestionRecordNotFound) {
-		shared.APIError(c, http.StatusNotFound, "question not found")
-		return
-	}
-	if err != nil {
-		shared.APIError(c, http.StatusInternalServerError, "query question failed")
 		return
 	}
 
@@ -163,18 +158,22 @@ func (con *QuestionController) Update(c *gin.Context) {
 		return
 	}
 	id, err := strconv.Atoi(idStr)
-	if err != nil {
+	if err != nil || id <= 0 {
 		shared.APIError(c, http.StatusBadRequest, "invalid question id")
 		return
 	}
 
-	var payload models.Question
+	var payload questionsvc.QuestionUpdateInput
 	if err := c.ShouldBindJSON(&payload); err != nil {
 		shared.APIError(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	question, err := con.service.UpdateByID(id, payload)
+	question, err := con.service.UpdateFieldsByID(id, payload)
+	if errors.Is(err, questionsvc.ErrQuestionInvalidInput) {
+		shared.APIError(c, http.StatusBadRequest, err.Error())
+		return
+	}
 	if errors.Is(err, questionsvc.ErrQuestionRecordNotFound) {
 		shared.APIError(c, http.StatusNotFound, "question not found")
 		return
@@ -199,8 +198,16 @@ func (con *QuestionController) DeleteProblem(c *gin.Context) {
 		shared.APIError(c, http.StatusBadRequest, err.Error())
 		return
 	}
+	if req.ID <= 0 {
+		shared.APIError(c, http.StatusBadRequest, "invalid question id")
+		return
+	}
 
 	err := con.service.DeleteByID(req.ID)
+	if errors.Is(err, questionsvc.ErrQuestionBusy) {
+		shared.APIError(c, http.StatusConflict, err.Error())
+		return
+	}
 	if errors.Is(err, questionsvc.ErrQuestionRecordNotFound) {
 		shared.APIError(c, http.StatusNotFound, "question not found")
 		return

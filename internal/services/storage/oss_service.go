@@ -16,7 +16,13 @@ import (
 	"github.com/minio/minio-go/v7"
 )
 
-var ErrOSSFilenameRequired = errors.New("filename is required")
+var (
+	ErrOSSFilenameRequired = errors.New("filename is required")
+	ErrOSSInvalidPath      = errors.New("invalid object path")
+	ErrOSSFileTooLarge     = errors.New("file exceeds 32 MiB limit")
+)
+
+const MaxUploadSize int64 = 32 << 20
 
 type ossObjectStore interface {
 	UploadFile(ctx context.Context, bucket, key string, reader io.Reader, size int64, contentType string) (minio.UploadInfo, error)
@@ -61,7 +67,14 @@ func NewOSSService(store ossObjectStore, bucket, publicPathPrefix string) *OSSSe
 }
 
 func (s *OSSService) UploadFile(ctx context.Context, prefix, originalFilename string, reader io.Reader, size int64, contentType string) (*OSSUploadResult, error) {
-	key := normalizeOSSPrefix(prefix) + uuid.New().String() + filepath.Ext(originalFilename)
+	if size < 0 || size > MaxUploadSize {
+		return nil, ErrOSSFileTooLarge
+	}
+	prefix, err := NormalizePrefix(prefix)
+	if err != nil {
+		return nil, err
+	}
+	key := prefix + uuid.New().String() + filepath.Ext(originalFilename)
 	info, err := s.store.UploadFile(ctx, s.bucket, key, reader, size, contentType)
 	if err != nil {
 		return nil, err
@@ -79,8 +92,14 @@ func (s *OSSService) BuildUploadURL(ctx context.Context, filename, prefix string
 	if filename == "" {
 		return nil, ErrOSSFilenameRequired
 	}
-
-	key := normalizeOSSPrefix(prefix) + filename
+	if filename == "." || filename == ".." || strings.ContainsAny(filename, "/\\\x00") {
+		return nil, ErrOSSInvalidPath
+	}
+	prefix, err := NormalizePrefix(prefix)
+	if err != nil {
+		return nil, err
+	}
+	key := prefix + filename
 	presignedURL, err := s.store.PresignPut(ctx, s.bucket, key, ttl)
 	if err != nil {
 		return nil, err
@@ -95,6 +114,13 @@ func (s *OSSService) BuildUploadURL(ctx context.Context, filename, prefix string
 }
 
 func (s *OSSService) ListFiles(ctx context.Context, prefix string, recursive bool) (*OSSListFilesResult, error) {
+	if prefix != "" {
+		var err error
+		prefix, err = NormalizePrefix(prefix)
+		if err != nil {
+			return nil, err
+		}
+	}
 	objects, err := s.store.ListObjectsInfo(ctx, s.bucket, prefix, recursive)
 	if err != nil {
 		return nil, err
@@ -105,15 +131,23 @@ func (s *OSSService) ListFiles(ctx context.Context, prefix string, recursive boo
 	}, nil
 }
 
-func normalizeOSSPrefix(prefix string) string {
-	prefix = strings.TrimSpace(prefix)
+func NormalizePrefix(prefix string) (string, error) {
+	prefix = strings.Trim(strings.TrimSpace(prefix), "/")
 	if prefix == "" {
 		prefix = "uploads/"
+	}
+	if strings.ContainsAny(prefix, "\\\x00") {
+		return "", ErrOSSInvalidPath
+	}
+	for _, part := range strings.Split(strings.TrimSuffix(prefix, "/"), "/") {
+		if part == "" || part == "." || part == ".." {
+			return "", ErrOSSInvalidPath
+		}
 	}
 	if !strings.HasSuffix(prefix, "/") {
 		prefix += "/"
 	}
-	return prefix
+	return prefix, nil
 }
 
 func applyPublicPathPrefix(rawURL, publicPathPrefix string) string {

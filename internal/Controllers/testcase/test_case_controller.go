@@ -1,14 +1,14 @@
 package testcase
 
 import (
-	"context"
 	"errors"
 	"net/http"
 	"strconv"
 	"strings"
 
+	"patreonoj/internal/Controllers/shared"
 	"patreonoj/internal/config"
-	"patreonoj/internal/controllers/shared"
+	"patreonoj/internal/models"
 	"patreonoj/internal/oss"
 	testcasesvc "patreonoj/internal/services/testcase"
 
@@ -36,21 +36,29 @@ type OSSTestCaseCommitRequest struct {
 
 func (tc *TestCaseController) Index(c *gin.Context) {
 	var questionPK *int
+	var businessID string
 	if v := strings.TrimSpace(c.Query("question_pk")); v != "" {
 		id, err := strconv.Atoi(v)
-		if err != nil {
+		if err != nil || id <= 0 {
 			shared.APIError(c, http.StatusBadRequest, "invalid question_pk")
 			return
 		}
 		questionPK = &id
 	} else if v := strings.TrimSpace(c.Query("question_id")); v != "" {
-		id, err := strconv.Atoi(v)
-		if err == nil {
-			questionPK = &id
-		}
+		businessID = v
 	}
 
-	testCases, err := tc.service.List(questionPK)
+	var testCases []models.TestCase
+	var err error
+	if businessID != "" {
+		testCases, err = tc.service.ListByBusinessID(businessID)
+	} else {
+		testCases, err = tc.service.List(questionPK)
+	}
+	if errors.Is(err, testcasesvc.ErrTestCaseQuestionAmbiguous) {
+		shared.APIError(c, http.StatusBadRequest, err.Error())
+		return
+	}
 	if errors.Is(err, testcasesvc.ErrTestCaseQuestionNotFound) {
 		shared.APIError(c, http.StatusNotFound, "question not found")
 		return
@@ -64,7 +72,7 @@ func (tc *TestCaseController) Index(c *gin.Context) {
 
 func (tc *TestCaseController) GetByQuestion(c *gin.Context) {
 	questionID, err := strconv.Atoi(c.Param("id"))
-	if err != nil {
+	if err != nil || questionID <= 0 {
 		shared.APIError(c, http.StatusBadRequest, "invalid question id")
 		return
 	}
@@ -100,13 +108,17 @@ func (tc *TestCaseController) OSSCommit(c *gin.Context) {
 		bucket = "patreon-oj-cases"
 	}
 
-	testCase, err := tc.service.CommitOSS(context.Background(), bucket, testcasesvc.TestCaseOSSCommitInput{
+	testCase, err := tc.service.CommitOSS(c.Request.Context(), bucket, testcasesvc.TestCaseOSSCommitInput{
 		QuestionPK: request.QuestionPK,
 		QuestionID: strings.TrimSpace(request.QuestionID),
 		InputKey:   request.InputKey,
 		OutputKey:  request.OutputKey,
 		IsHidden:   request.IsHidden,
 	})
+	if errors.Is(err, testcasesvc.ErrTestCaseQuestionAmbiguous) {
+		shared.APIError(c, http.StatusBadRequest, err.Error())
+		return
+	}
 	if errors.Is(err, testcasesvc.ErrTestCaseOSSUnavailable) {
 		shared.APIError(c, http.StatusInternalServerError, "oss unavailable")
 		return
@@ -133,7 +145,7 @@ func (tc *TestCaseController) OSSCommit(c *gin.Context) {
 
 func (tc *TestCaseController) Show(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
+	if err != nil || id == 0 {
 		shared.APIError(c, http.StatusBadRequest, "invalid testcase id")
 		return
 	}
@@ -153,7 +165,7 @@ func (tc *TestCaseController) Show(c *gin.Context) {
 
 func (tc *TestCaseController) Update(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
+	if err != nil || id == 0 {
 		shared.APIError(c, http.StatusBadRequest, "invalid testcase id")
 		return
 	}
@@ -169,13 +181,17 @@ func (tc *TestCaseController) Update(c *gin.Context) {
 		bucket = "patreon-oj-cases"
 	}
 
-	testCase, err := tc.service.UpdateOSS(context.Background(), bucket, uint(id), testcasesvc.TestCaseOSSCommitInput{
+	testCase, err := tc.service.UpdateOSS(c.Request.Context(), bucket, uint(id), testcasesvc.TestCaseOSSCommitInput{
 		QuestionPK: request.QuestionPK,
 		QuestionID: strings.TrimSpace(request.QuestionID),
 		InputKey:   request.InputKey,
 		OutputKey:  request.OutputKey,
 		IsHidden:   request.IsHidden,
 	})
+	if errors.Is(err, testcasesvc.ErrTestCaseQuestionAmbiguous) {
+		shared.APIError(c, http.StatusBadRequest, err.Error())
+		return
+	}
 	if errors.Is(err, testcasesvc.ErrTestCaseNotFound) {
 		shared.APIError(c, http.StatusNotFound, "testcase not found")
 		return
@@ -206,7 +222,7 @@ func (tc *TestCaseController) Update(c *gin.Context) {
 
 func (tc *TestCaseController) Delete(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
+	if err != nil || id == 0 {
 		shared.APIError(c, http.StatusBadRequest, "invalid testcase id")
 		return
 	}
@@ -223,4 +239,3 @@ func (tc *TestCaseController) Delete(c *gin.Context) {
 
 	shared.APIOK(c, http.StatusOK, "delete testcase success", gin.H{"message": "ok"})
 }
-

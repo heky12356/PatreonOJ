@@ -3,8 +3,10 @@ package user
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"patreonoj/internal/models"
 
@@ -19,7 +21,7 @@ func newUserServiceTestDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("open test db failed: %v", err)
 	}
-	if err := db.AutoMigrate(&models.User{}, &models.Role{}, &models.Permission{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.Role{}, &models.Permission{}, &models.Session{}); err != nil {
 		t.Fatalf("migrate test db failed: %v", err)
 	}
 	return db
@@ -177,5 +179,61 @@ func TestUserService_UpdateByUUID_ClearRoles(t *testing.T) {
 	}
 	if len(out.Roles) != 0 {
 		t.Fatalf("expected no roles, got %+v", out.Roles)
+	}
+}
+
+func TestUserService_ProfileNotFound(t *testing.T) {
+	svc := NewUserService(newUserServiceTestDB(t))
+	if _, err := svc.GetProfileById("9999"); !errors.Is(err, ErrUserNotFound) {
+		t.Fatalf("profile: got %v", err)
+	}
+	if _, err := svc.GetProfilePublic("9999"); !errors.Is(err, ErrUserNotFound) {
+		t.Fatalf("public profile: got %v", err)
+	}
+}
+
+func TestUserService_InvalidRoleRollsBackAllFields(t *testing.T) {
+	for _, byID := range []bool{false, true} {
+		t.Run(strconv.FormatBool(byID), func(t *testing.T) {
+			db := newUserServiceTestDB(t)
+			user := seedUserForService(t, db, "unchanged", "unchanged-uuid")
+			nickname := "must-not-save"
+			permissions := "admin"
+			input := UserUpdateInput{Nickname: &nickname, Permissions: &permissions, RoleCodes: &[]string{"missing-role"}}
+			var err error
+			if byID {
+				_, err = NewUserService(db).UpdateByID(strconv.Itoa(user.Id), input)
+			} else {
+				_, err = NewUserService(db).UpdateByUUID(user.UUID, input)
+			}
+			if !errors.Is(err, ErrUserRoleNotFound) {
+				t.Fatalf("expected invalid role: %v", err)
+			}
+			var saved models.User
+			db.First(&saved, user.Id)
+			if saved.Nickname != "" || saved.Permissions != "" {
+				t.Fatal("invalid role caused a partial update")
+			}
+		})
+	}
+}
+
+func TestUserService_DisablingAccountRevokesSessions(t *testing.T) {
+	db := newUserServiceTestDB(t)
+	user := seedUserForService(t, db, "disabled-user", "disabled-uuid")
+	expiry := time.Now().Add(time.Hour)
+	if err := db.Create(&models.Session{UserId: user.Id, SessionId: "active-session", ExpiresAt: &expiry}).Error; err != nil {
+		t.Fatal(err)
+	}
+	status := "disabled"
+	if _, err := NewUserService(db).UpdateByID(strconv.Itoa(user.Id), UserUpdateInput{Status: &status}); err != nil {
+		t.Fatal(err)
+	}
+	var session models.Session
+	if err := db.First(&session).Error; err != nil {
+		t.Fatal(err)
+	}
+	if session.RevokedAt == nil {
+		t.Fatal("disabled user's session remains valid")
 	}
 }

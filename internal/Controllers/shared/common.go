@@ -1,8 +1,8 @@
 package shared
 
 import (
+	"net/http"
 	"strconv"
-	"strings"
 
 	"patreonoj/internal/models"
 	"patreonoj/internal/util"
@@ -12,37 +12,30 @@ import (
 )
 
 func CanAccessUserState(user models.User, targetID string) bool {
-	opID := strconv.Itoa(user.Id)
-	isAdmin := util.UserInstance.HasPermission(user, "admin")
-
-	if targetID == "" {
+	id, err := strconv.Atoi(targetID)
+	if err != nil || id <= 0 || user.Id <= 0 || (user.Status != "" && user.Status != "active") {
 		return false
 	}
-	if opID != targetID && !isAdmin {
+	isAdmin := util.UserInstance.HasPermission(user, "admin")
+	if user.Id != id && !isAdmin {
 		return false
 	}
 
 	return true
 }
 
-func RequireOperatorUUID(db *gorm.DB, c *gin.Context) (string, bool) {
-	op := strings.TrimSpace(c.GetHeader("X-User-UUID"))
-	if op == "" {
-		op = strings.TrimSpace(c.Query("operator_uuid"))
-	}
-	if op == "" {
-		APIError(c, 401, "unauthorized")
-		return "", false
-	}
-
-	var user models.User
-	if err := db.Where("uuid = ?", op).First(&user).Error; err != nil {
-		APIError(c, 401, "invalid session")
+// RequireOperatorUUID uses the authenticated session; request headers and query
+// parameters cannot establish an operator's identity.
+func RequireOperatorUUID(_ *gorm.DB, c *gin.Context) (string, bool) {
+	value, ok := c.Get("currentUser")
+	user, valid := value.(models.User)
+	if !ok || !valid || user.Id <= 0 || user.UUID == "" {
+		APIError(c, http.StatusUnauthorized, "unauthorized")
 		return "", false
 	}
 	if user.Status != "" && user.Status != "active" {
 		APIError(c, 403, "user is disabled")
 		return "", false
 	}
-	return op, true
+	return user.UUID, true
 }
