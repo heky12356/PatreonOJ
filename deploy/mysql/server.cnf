@@ -1,0 +1,8 @@
+[mysqld]
+character-set-server=utf8mb4
+collation-server=utf8mb4_0900_ai_ci
+default-time-zone=+00:00
+innodb-buffer-pool-size=128M
+max-connections=120
+performance-schema=OFF
+temptable-max-ram=32M

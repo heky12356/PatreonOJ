@@ -1,7 +1,14 @@
 database:
-  type: sqlite
-  sqlite:
-    path: /app/data/patreon.db
+  type: mysql
+  mysql:
+    host: mysql
+    port: 3306
+    username: patreonoj
+    password: overridden_by_environment
+    dbname: patreonoj
+    charset: utf8mb4
+    parseTime: true
+    loc: UTC
 server:
   host: 0.0.0.0
   port: 8080

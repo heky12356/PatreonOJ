@@ -10,15 +10,16 @@ services:
   web:
     image: patreonoj-web:${RELEASE_TAG:-local}
     build:
-      context: ../../yjls
+      context: ../../PatreonOJ-UI
     restart: unless-stopped
     ports:
       - "80:80"
       - "443:443"
     environment:
       SITE_DOMAIN: ${SITE_DOMAIN:?Set SITE_DOMAIN}
+      TRUSTED_PROXY_CIDRS: ${TRUSTED_PROXY_CIDRS:-127.0.0.1/32 ::1/128}
     volumes:
-      - ../../yjls/deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ../../PatreonOJ-UI/deploy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
     networks:
@@ -43,16 +44,19 @@ services:
       context: ..
     restart: unless-stopped
     environment:
+      PATREONOJ_DATABASE_MYSQL_DBNAME: ${MYSQL_DATABASE:-patreonoj}
+      PATREONOJ_DATABASE_MYSQL_USERNAME: ${MYSQL_USER:-patreonoj}
+      PATREONOJ_DATABASE_MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD}
       PATREONOJ_OSS_PUBLIC_ADDRESS: https://${SITE_DOMAIN:?Set SITE_DOMAIN}
       PATREONOJ_OSS_ACCESS_KEY: ${MINIO_ROOT_USER:?Set MINIO_ROOT_USER}
       PATREONOJ_OSS_SECRET_KEY: ${MINIO_ROOT_PASSWORD:?Set MINIO_ROOT_PASSWORD}
       PATREONOJ_JUDGE_GO_JUDGE_TOKEN: ${JUDGE_TOKEN:?Set JUDGE_TOKEN}
-    volumes:
-      - database:/app/data
     networks:
       app:
         ipv4_address: 172.30.88.11
     depends_on:
+      mysql:
+        condition: service_healthy
       oss:
         condition: service_healthy
       judge:
@@ -61,6 +65,35 @@ services:
     mem_limit: 512m
     cpus: 1
     logging: *logging
+
+  mysql:
+    image: patreonoj-mysql:${RELEASE_TAG:-local}
+    build:
+      context: ./mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-patreonoj}
+      MYSQL_USER: ${MYSQL_USER:-patreonoj}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Set MYSQL_ROOT_PASSWORD}
+      TZ: UTC
+    volumes:
+      - mysql_data:/var/lib/mysql
+    networks:
+      app:
+        ipv4_address: 172.30.88.14
+    mem_limit: 640m
+    cpus: 1
+    stop_grace_period: 60s
+    logging: *logging
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'MYSQL_PWD="$${MYSQL_PASSWORD}" mysql --protocol=TCP -h 127.0.0.1 -u "$${MYSQL_USER}" "$${MYSQL_DATABASE}" --execute="SELECT 1" > /dev/null'
+      interval: 10s
+      timeout: 5s
+      start_period: 60s
+      retries: 12
 
   oss:
     image: patreonoj-oss:${RELEASE_TAG:-local}
@@ -115,7 +148,7 @@ networks:
         - subnet: 172.30.88.0/24
 
 volumes:
-  database:
+  mysql_data:
   objects:
   caddy_data:
   caddy_config:
