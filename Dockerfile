@@ -16,7 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     install -d -o app -g app /app/data
 WORKDIR /app
 COPY --from=build /out/ /app/
-COPY deploy/config.compose.yaml /app/config.yaml
+COPY --chown=10001:10001 --chmod=640 deploy/config.compose.yaml /app/config.yaml
 USER 10001:10001
 EXPOSE 8080
 HEALTHCHECK --interval=15s --timeout=3s --start-period=30s --retries=5 \
