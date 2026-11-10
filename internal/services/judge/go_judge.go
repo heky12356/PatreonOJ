@@ -141,12 +141,17 @@ func (c *GoJudgeClient) compile(ctx context.Context, code, language string) (str
 		cmd.Args = []string{"g++", "main.cpp", "-o", artifact, "-O2", "-std=c++17"}
 		cmd.CopyIn = map[string]CmdFile{"main.cpp": {Content: &code}}
 	case "go":
-		cmd.Args = []string{"go", "build", "-o", artifact, "main.go"}
-		cmd.Env = append(cmd.Env, "GOCACHE=/tmp/go-cache", "GOMODCACHE=/tmp/go-mod", "GO111MODULE=off", "GOTOOLCHAIN=local")
+		// Cold Go builds also compile the standard library. This budget is
+		// separate from the problem's execution limit and remains bounded.
+		cmd.CPULimit, cmd.ClockLimit = 45_000_000_000, 90_000_000_000
+		cmd.Args = []string{"go", "build", "-p", "2", "-o", artifact, "main.go"}
+		cmd.Env = append(cmd.Env, "GOCACHE=/tmp/go-cache", "GOMODCACHE=/tmp/go-mod", "GO111MODULE=off", "GOTOOLCHAIN=local", "GOMAXPROCS=2")
 		cmd.CopyIn = map[string]CmdFile{"main.go": {Content: &code}}
 	case "java":
 		artifact = "main.jar"
-		cmd.Args = []string{"sh", "-c", "mkdir -p classes && javac -d classes Main.java && jar cf main.jar -C classes ."}
+		// /tmp and /w are separate sandbox mounts. Keep jar's temporary archive
+		// in the work directory so packaging does not require a cross-mount move.
+		cmd.Args = []string{"sh", "-c", "mkdir -p classes && javac -d classes Main.java && jar -J-Djava.io.tmpdir=. cf main.jar -C classes ."}
 		cmd.CopyIn = map[string]CmdFile{"Main.java": {Content: &code}}
 	}
 	cmd.CopyOutCached = []string{artifact + "?"}

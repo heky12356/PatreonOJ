@@ -1,0 +1,121 @@
+name: patreonoj
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  web:
+    image: patreonoj-web:${RELEASE_TAG:-local}
+    build:
+      context: ../../yjls
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      SITE_DOMAIN: ${SITE_DOMAIN:?Set SITE_DOMAIN}
+    volumes:
+      - ../../yjls/deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      edge: {}
+      app:
+        ipv4_address: 172.30.88.10
+    depends_on:
+      api:
+        condition: service_healthy
+    mem_limit: 128m
+    cpus: 0.5
+    logging: *logging
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/api/healthz"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+
+  api:
+    image: patreonoj-api:${RELEASE_TAG:-local}
+    build:
+      context: ..
+    restart: unless-stopped
+    environment:
+      PATREONOJ_OSS_PUBLIC_ADDRESS: https://${SITE_DOMAIN:?Set SITE_DOMAIN}
+      PATREONOJ_OSS_ACCESS_KEY: ${MINIO_ROOT_USER:?Set MINIO_ROOT_USER}
+      PATREONOJ_OSS_SECRET_KEY: ${MINIO_ROOT_PASSWORD:?Set MINIO_ROOT_PASSWORD}
+      PATREONOJ_JUDGE_GO_JUDGE_TOKEN: ${JUDGE_TOKEN:?Set JUDGE_TOKEN}
+    volumes:
+      - database:/app/data
+    networks:
+      app:
+        ipv4_address: 172.30.88.11
+    depends_on:
+      oss:
+        condition: service_healthy
+      judge:
+        condition: service_healthy
+    stop_grace_period: 40s
+    mem_limit: 512m
+    cpus: 1
+    logging: *logging
+
+  oss:
+    image: patreonoj-oss:${RELEASE_TAG:-local}
+    build:
+      context: ./minio
+    command: ["server", "/data", "--address", ":9000", "--console-address", ":9001"]
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?Set MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?Set MINIO_ROOT_PASSWORD}
+      MINIO_BROWSER: "off"
+      MINIO_UPDATE: "off"
+      MINIO_API_REQUESTS_MAX: "16"
+    volumes:
+      - objects:/data
+    networks:
+      app:
+        ipv4_address: 172.30.88.12
+    mem_limit: 512m
+    cpus: 0.5
+    logging: *logging
+
+  judge:
+    image: patreonoj-judge:${RELEASE_TAG:-local}
+    build:
+      context: ./go-judge
+    command: ["-http-addr", ":5050", "-parallelism", "2", "-file-timeout", "10m", "-output-limit", "64m", "-copy-out-limit", "16m", "-auth-token", "${JUDGE_TOKEN:?Set JUDGE_TOKEN}", "-no-fallback", "-silent"]
+    privileged: true
+    cgroup: host
+    shm_size: 256m
+    restart: unless-stopped
+    networks:
+      app:
+        ipv4_address: 172.30.88.13
+    mem_limit: 1536m
+    cpus: 1.5
+    logging: *logging
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-H", "Authorization: Bearer ${JUDGE_TOKEN:?Set JUDGE_TOKEN}", "http://127.0.0.1:5050/version"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 5
+
+networks:
+  edge:
+    driver: bridge
+  app:
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.30.88.0/24
+
+volumes:
+  database:
+  objects:
+  caddy_data:
+  caddy_config:

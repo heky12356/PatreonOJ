@@ -5,3 +5,6 @@ config.yaml
 main.exe
 cmd/test_flow
 .gocache
+.env
+.env.*
+deploy/compose.env

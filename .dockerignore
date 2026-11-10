@@ -1,0 +1,12 @@
+.git
+.gocache*
+.tmp*
+data
+doce
+config.yaml
+*.exe
+*.log
+*.err
+.env
+.env.*
+!deploy/compose.env.example

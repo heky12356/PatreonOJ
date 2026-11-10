@@ -1,0 +1,41 @@
+database:
+  type: sqlite
+  sqlite:
+    path: /app/data/patreon.db
+server:
+  host: 0.0.0.0
+  port: 8080
+  mode: release
+  secure_cookies: true
+  trusted_proxies: ["172.30.88.10"]
+  auth_max_concurrent: 1
+  auth_requests_per_minute: 60
+oss:
+  address: http://oss:9000
+  public_address: https://oj.example.com
+  public_path_prefix: /oss
+  public_read_prefixes: ["avatars/"]
+  access_key: overridden_by_environment
+  secret_key: overridden_by_environment
+  bucket_name: patreon-oj-cases
+judge:
+  mode: remote
+  timeout: 120
+  queue_size: 100
+  local:
+    enabled: false
+    executor: docker
+    max_memory: 256
+    max_time: 5000
+    max_output_size: 1024
+    max_work_size: 256
+  go_judge:
+    enabled: true
+    api_url: http://judge:5050/run
+    token: overridden_by_environment
+    max_memory: 256
+    max_time: 5000
+graph_database:
+  enabled: false
+ai:
+  enabled: false
