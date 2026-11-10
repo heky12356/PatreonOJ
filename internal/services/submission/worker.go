@@ -92,12 +92,12 @@ func (w *SubmissionWorker) recoverStale(ctx context.Context) error {
 	cutoff := time.Now().Add(-w.deadline - 30*time.Second)
 	if err := db.Model(&models.Submission{}).
 		Where("status = ? AND updated_at < ? AND attempts >= ?", "processing", cutoff, maxJudgeAttempts).
-		Updates(map[string]interface{}{"status": "error", "error_code": "E005", "error_msg": "judge worker did not complete before its lease expired"}).Error; err != nil {
+		Updates(map[string]interface{}{"status": "error", "verdict": "SE", "error_code": "E005", "error_msg": "judge worker did not complete before its lease expired"}).Error; err != nil {
 		return err
 	}
 	return db.Model(&models.Submission{}).
 		Where("status = ? AND updated_at < ? AND attempts < ?", "processing", cutoff, maxJudgeAttempts).
-		Updates(map[string]interface{}{"status": "pending", "error_code": "", "error_msg": ""}).Error
+		Updates(map[string]interface{}{"status": "pending", "verdict": "", "error_code": "", "error_msg": ""}).Error
 }
 
 func (w *SubmissionWorker) claim(ctx context.Context) (*models.Submission, error) {
@@ -112,7 +112,7 @@ func (w *SubmissionWorker) claim(ctx context.Context) (*models.Submission, error
 	}
 	if candidate.Attempts >= maxJudgeAttempts {
 		return nil, db.Model(&models.Submission{}).Where("id = ? AND status = ?", candidate.ID, "pending").
-			Updates(map[string]interface{}{"status": "error", "error_code": "E005", "error_msg": "judge retry limit exceeded"}).Error
+			Updates(map[string]interface{}{"status": "error", "verdict": "SE", "error_code": "E005", "error_msg": "judge retry limit exceeded"}).Error
 	}
 	result := db.Model(&models.Submission{}).
 		Where("id = ? AND status = ? AND attempts = ?", candidate.ID, "pending", candidate.Attempts).
@@ -154,6 +154,10 @@ func (w *SubmissionWorker) process(parent context.Context, submission *models.Su
 		updates["attempts"] = gorm.Expr("attempts - 1")
 	} else if EnsureSubmissionErrorCode(err) == "E005" && submission.Attempts < maxJudgeAttempts {
 		updates["status"], updates["error_code"], updates["error_msg"] = "pending", "", ""
+	}
+	updates["verdict"] = ""
+	if updates["status"] == "error" {
+		updates["verdict"] = (models.Submission{Status: "error", ErrorCode: EnsureSubmissionErrorCode(err)}).ResultVerdict()
 	}
 	// Use a fresh bounded context to release the lease even during shutdown.
 	saveCtx, saveCancel := context.WithTimeout(context.Background(), 5*time.Second)

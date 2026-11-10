@@ -18,12 +18,13 @@ var (
 )
 
 type UserUpdateInput struct {
-	Nickname    *string
-	Email       *string
-	AvatarURL   *string
-	Status      *string
-	Permissions *string
-	RoleCodes   *[]string
+	ShowActivity *bool
+	Nickname     *string
+	Email        *string
+	AvatarURL    *string
+	Status       *string
+	Permissions  *string
+	RoleCodes    *[]string
 }
 
 type UserListFilter struct {
@@ -84,19 +85,11 @@ func (s *UserService) GetByUUID(uuid string) (*models.User, error) {
 }
 
 func (s *UserService) GetProfilePublic(id string) (map[string]string, error) {
-	var user models.User
-	if err := s.db.Where("id = ?", id).First(&user).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrUserNotFound
-		}
+	user, err := s.GetByIdentifier(id)
+	if err != nil {
 		return nil, err
 	}
-
-	req := make(map[string]string)
-	req["nickname"] = user.Nickname
-	req["avatar_url"] = user.AvatarURL
-
-	return req, nil
+	return map[string]string{"username": user.Username, "uuid": user.UUID, "nickname": user.Nickname, "avatar_url": user.AvatarURL}, nil
 }
 
 func (s *UserService) GetProfileById(id string) (*models.User, error) {
@@ -140,6 +133,9 @@ func (s *UserService) update(condition string, value interface{}, input UserUpda
 			return err
 		}
 		updates := map[string]interface{}{}
+		if input.ShowActivity != nil {
+			updates["show_activity"] = *input.ShowActivity
+		}
 		if input.Nickname != nil {
 			updates["nickname"] = strings.TrimSpace(*input.Nickname)
 		}

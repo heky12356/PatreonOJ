@@ -125,10 +125,15 @@ func (js *JudgeService) JudgeCodeContext(ctx context.Context, submission *models
 		return fmt.Errorf("judge response count mismatch: got=%d want=%d", len(results), len(testCases))
 	}
 	allCorrect := len(results) > 0
+	verdict := "AC"
 	var runtime, memory int64
 	for i := range results {
 		r := &results[i]
 		r.IsCorrect = r.IsCorrect && normalizeOutput(r.ActualOutput) == expected[i]
+		r.Verdict = r.ResultVerdict()
+		if verdict == "AC" && !r.IsCorrect {
+			verdict = r.Verdict
+		}
 		r.Input = inputs[i]
 		r.ExpectedOutput = expected[i]
 		r.TestCaseID = testCases[i].ID
@@ -148,7 +153,7 @@ func (js *JudgeService) JudgeCodeContext(ctx context.Context, submission *models
 	}
 	err = js.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		updated := tx.Model(&models.Submission{}).Where("id = ? AND status = ? AND updated_at = ?", current.ID, "processing", lease).Updates(map[string]interface{}{
-			"status": "completed", "results": string(data), "runtime_ms": runtime, "memory_kb": memory, "language": language, "code_length": len(current.Code), "error_code": "", "error_msg": "",
+			"status": "completed", "verdict": verdict, "results": string(data), "runtime_ms": runtime, "memory_kb": memory, "language": language, "code_length": len(current.Code), "error_code": "", "error_msg": "",
 		})
 		if updated.Error != nil {
 			return updated.Error

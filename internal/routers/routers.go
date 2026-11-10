@@ -48,6 +48,8 @@ func RoutersInit(r *gin.Engine, ossClient *oss.OSS) func(context.Context) error 
 	{
 		authUserRouter.GET("/", userCtrl.Index)
 		authUserRouter.GET("/me", userCtrl.GetProfile)
+		authUserRouter.GET("/me/problem-status", userCtrl.ProblemStatuses)
+		authUserRouter.GET("/solve", userSolveCtrl.Show)
 		authUserRouter.POST("/logout", authCtrl.Logout)
 		authUserRouter.GET("/solves/:uuid", userSolveCtrl.Index)
 		authUserRouter.GET("/:id", userCtrl.Show)
@@ -62,6 +64,7 @@ func RoutersInit(r *gin.Engine, ossClient *oss.OSS) func(context.Context) error 
 		userRouter.POST("/register", throttle, authCtrl.Register)
 		// 获取用户详细
 		userRouter.GET("/:id/public", userCtrl.GetProfilePublic)
+		userRouter.GET("/:id/home", userCtrl.Home)
 	}
 
 	// 查询提交记录

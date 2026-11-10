@@ -43,8 +43,8 @@ func InitDB() error {
 	// 配置GORM
 	gormConfig := &gorm.Config{
 		Logger: logger.New(log.New(os.Stdout, "", log.LstdFlags), logger.Config{
-			SlowThreshold: time.Second,
-			LogLevel: logger.Warn,
+			SlowThreshold:        time.Second,
+			LogLevel:             logger.Warn,
 			ParameterizedQueries: true,
 		}),
 	}
@@ -63,8 +63,8 @@ func InitDB() error {
 		}
 
 		// 设置连接池参数
-		sqlDB.SetMaxIdleConns(10)      // 最大空闲连接数
-		sqlDB.SetMaxOpenConns(100)     // 最大打开连接数
+		sqlDB.SetMaxIdleConns(10)  // 最大空闲连接数
+		sqlDB.SetMaxOpenConns(100) // 最大打开连接数
 		sqlDB.SetConnMaxLifetime(time.Hour)
 	} else {
 		sqlDB, err := DB.DB()
@@ -119,5 +119,5 @@ func AutoMigrate() error {
 	}
 
 	log.Println("数据库表迁移完成")
-	return nil
+	return BackfillSubmissionVerdicts()
 }

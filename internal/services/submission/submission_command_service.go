@@ -147,7 +147,21 @@ func (s *SubmissionCommandService) buildSubmissionResult(submissionID string, vi
 		return nil, ErrSubmissionForbidden
 	}
 
+	var author models.User
+	if err := s.db.Select("id", "uuid", "username", "show_activity").Where("uuid = ?", submission.UserID).First(&author).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
+	}
+	if viewer != nil && viewer.UUID != submission.UserID && !util.UserInstance.HasPermission(*viewer, "admin") && author.UUID != "" && !author.ShowActivity {
+		return nil, ErrSubmissionForbidden
+	}
 	response := map[string]interface{}{
+		"verdict":       submission.ResultVerdict(),
+		"username":      author.Username,
+		"code":          submission.Code,
+		"language":      submission.Language,
+		"runtime_ms":    submission.RuntimeMs,
+		"memory_kb":     submission.MemoryKB,
+		"code_length":   submission.CodeLength,
 		"submission_id": submission.ID,
 		"user_id":       submission.UserID,
 		"question_pk":   submission.QuestionID,
@@ -163,6 +177,7 @@ func (s *SubmissionCommandService) buildSubmissionResult(submissionID string, vi
 		}
 		response["question_pk"] = question.Id
 		response["question_id"] = question.QuestionId
+		response["question_title"] = question.Title
 	}
 
 	switch submission.Status {
@@ -187,6 +202,7 @@ func (s *SubmissionCommandService) buildSubmissionResult(submissionID string, vi
 			}
 		}
 		for i := range results {
+			results[i].Verdict = results[i].ResultVerdict()
 			if results[i].Hidden || !visible[results[i].TestCaseID] {
 				results[i].Hidden = true
 				results[i].Input, results[i].ExpectedOutput, results[i].ActualOutput = "", "", ""

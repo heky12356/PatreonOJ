@@ -29,13 +29,14 @@ func NewUserController(db *gorm.DB) *UserController {
 }
 
 type UpdateUserRequest struct {
-	Id          *string   `json:"id"` // 前端传id判断修改的用户
-	Nickname    *string   `json:"nickname"`
-	Email       *string   `json:"email"`
-	AvatarURL   *string   `json:"avatar_url"`
-	Status      *string   `json:"status"`
-	Permissions *string   `json:"permissions"`
-	RoleCodes   *[]string `json:"role_codes"`
+	ShowActivity *bool     `json:"show_activity"`
+	Id           *string   `json:"id"` // 前端传id判断修改的用户
+	Nickname     *string   `json:"nickname"`
+	Email        *string   `json:"email"`
+	AvatarURL    *string   `json:"avatar_url"`
+	Status       *string   `json:"status"`
+	Permissions  *string   `json:"permissions"`
+	RoleCodes    *[]string `json:"role_codes"`
 }
 
 func (uc *UserController) Index(c *gin.Context) {
@@ -166,12 +167,13 @@ func (uc *UserController) Update(c *gin.Context) {
 	}
 
 	user, err = uc.service.UpdateByID(targetID, usersvc.UserUpdateInput{
-		Nickname:    req.Nickname,
-		Email:       req.Email,
-		AvatarURL:   req.AvatarURL,
-		Status:      req.Status,
-		Permissions: req.Permissions,
-		RoleCodes:   req.RoleCodes,
+		ShowActivity: req.ShowActivity,
+		Nickname:     req.Nickname,
+		Email:        req.Email,
+		AvatarURL:    req.AvatarURL,
+		Status:       req.Status,
+		Permissions:  req.Permissions,
+		RoleCodes:    req.RoleCodes,
 	})
 	if errors.Is(err, usersvc.ErrUserNotFound) {
 		shared.APIError(c, http.StatusNotFound, "user not found")

@@ -20,6 +20,7 @@ type Submission struct {
 
 	Code      string `json:"code" gorm:"type:mediumtext"`
 	Status    string `json:"status" gorm:"index:idx_submission_status_created"`
+	Verdict   string `json:"verdict" gorm:"type:varchar(16);index"`
 	Attempts  int    `json:"-" gorm:"not null;default:0"`
 	Results   string `json:"results" gorm:"type:longtext"` // JSON results may include large public testcases.
 	ErrorCode string `json:"error_code"`                   // 错误码
@@ -30,6 +31,7 @@ type Submission struct {
 }
 
 type TestCaseResult struct {
+	Verdict        string `json:"verdict"`
 	TestCaseID     uint   `json:"test_case_id,omitempty"`
 	Hidden         bool   `json:"is_hidden,omitempty"`
 	Input          string `json:"input"`

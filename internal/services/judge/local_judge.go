@@ -172,13 +172,14 @@ func (ljs *LocalJudgeService) judgeBatchDocker(ctx context.Context, code string,
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		result := models.TestCaseResult{Input: input, ActualOutput: strings.TrimSpace(stdout), Runtime: time.Since(start).Milliseconds(), IsCorrect: runErr == nil && !overflow}
+		result := models.TestCaseResult{Verdict: "AC", Input: input, ActualOutput: strings.TrimSpace(stdout), Runtime: time.Since(start).Milliseconds(), IsCorrect: runErr == nil && !overflow}
 		if overflow {
+			result.Verdict = "OLE"
 			result.ActualOutput = "Output Limit Exceeded"
 			results = append(results, result)
 			// Kill the whole sandbox so an output flood cannot survive the cancelled CLI.
 			for len(results) < len(inputs) {
-				results = append(results, models.TestCaseResult{ActualOutput: "Output Limit Exceeded"})
+				results = append(results, models.TestCaseResult{Verdict: "OLE", ActualOutput: "Output Limit Exceeded"})
 			}
 			return results, nil
 		}
@@ -186,8 +187,10 @@ func (ljs *LocalJudgeService) judgeBatchDocker(ctx context.Context, code string,
 			var exitErr *exec.ExitError
 			if deadline || (errors.As(runErr, &exitErr) && (exitErr.ExitCode() == 124 || exitErr.ExitCode() == 137)) {
 				result.ActualOutput = "Time Limit Exceeded"
+				result.Verdict = "TLE"
 			} else {
 				result.ActualOutput = "Runtime Error: " + strings.TrimSpace(fmt.Sprint(runErr)+" "+stderr)
+				result.Verdict = "RE"
 			}
 		}
 		results = append(results, result)

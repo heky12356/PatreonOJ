@@ -8,15 +8,16 @@ import (
 
 // User 用户模型
 type User struct {
-	Id          int    `gorm:"primaryKey;autoIncrement" json:"id"`
-	Username    string `gorm:"type:varchar(64);uniqueIndex;not null" json:"username"`
-	Password    string `gorm:"type:varchar(255);not null" json:"-"`
-	UUID        string `gorm:"size:36;uniqueIndex;not null" json:"uuid"`
-	Nickname    string `gorm:"type:varchar(64)" json:"nickname"`
-	Email       string `gorm:"type:varchar(255)" json:"email"`
-	AvatarURL   string `gorm:"type:text" json:"avatar_url"`
-	Permissions string `gorm:"type:text" json:"permissions"`
-	Status      string `gorm:"type:varchar(32);default:active;index" json:"status"`
+	Id           int    `gorm:"primaryKey;autoIncrement" json:"id"`
+	Username     string `gorm:"type:varchar(64);uniqueIndex;not null" json:"username"`
+	Password     string `gorm:"type:varchar(255);not null" json:"-"`
+	UUID         string `gorm:"size:36;uniqueIndex;not null" json:"uuid"`
+	Nickname     string `gorm:"type:varchar(64)" json:"nickname"`
+	Email        string `gorm:"type:varchar(255)" json:"email"`
+	AvatarURL    string `gorm:"type:text" json:"avatar_url"`
+	Permissions  string `gorm:"type:text" json:"permissions"`
+	Status       string `gorm:"type:varchar(32);default:active;index" json:"status"`
+	ShowActivity bool   `gorm:"not null;default:true" json:"show_activity"`
 
 	Roles []Role `gorm:"many2many:user_role;" json:"roles"`
 

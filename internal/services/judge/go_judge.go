@@ -277,16 +277,20 @@ func fallbackGoJudgeURL(apiURL string, statusCode int) (string, bool) {
 }
 
 func parseResult(resp CmdResponse, input string) models.TestCaseResult {
-	r := models.TestCaseResult{Input: input, Runtime: int64(resp.Time / 1_000_000), MemoryUsage: int64(resp.Memory / 1024), ActualOutput: resp.Files["stdout"]}
+	r := models.TestCaseResult{Verdict: "SE", Input: input, Runtime: int64(resp.Time / 1_000_000), MemoryUsage: int64(resp.Memory / 1024), ActualOutput: resp.Files["stdout"]}
 	switch resp.Status {
 	case "Accepted":
+		r.Verdict = "AC"
 		r.IsCorrect = resp.ExitStatus == 0
 		if !r.IsCorrect {
+			r.Verdict = "RE"
 			r.ActualOutput = "Runtime Error (Non Zero Exit)"
 		}
 	case "Time Limit Exceeded", "Memory Limit Exceeded", "Output Limit Exceeded":
+		r.Verdict = map[string]string{"Time Limit Exceeded": "TLE", "Memory Limit Exceeded": "MLE", "Output Limit Exceeded": "OLE"}[resp.Status]
 		r.ActualOutput = resp.Status
 	case "Signalled", "Nonzero Exit Status", "Non Zero Exit Status", "Dangerous Syscall":
+		r.Verdict = "RE"
 		r.ActualOutput = "Runtime Error: " + resp.Status
 	default:
 		r.ActualOutput = "Error: " + resp.Status

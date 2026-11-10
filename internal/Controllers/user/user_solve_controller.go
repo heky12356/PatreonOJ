@@ -1,57 +1,73 @@
 package user
 
 import (
-	"net/http"
-	"strings"
-
+	"errors"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
+	"net/http"
+	"patreonoj/internal/models"
+	"patreonoj/internal/util"
+	"strings"
 )
 
-type UserSolveController struct {
-	db *gorm.DB
-}
+type UserSolveController struct{ db *gorm.DB }
 
-func NewUserSolveController(db *gorm.DB) *UserSolveController {
-	return &UserSolveController{db: db}
-}
+func NewUserSolveController(db *gorm.DB) *UserSolveController { return &UserSolveController{db: db} }
 
-// GET /user/solves/:uuid
+func (uc *UserSolveController) query(c *gin.Context, uuid string) (*gorm.DB, bool) {
+	var target models.User
+	if err := uc.db.Where("uuid = ?", uuid).First(&target).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(404, gin.H{"error": "user not found"})
+		} else {
+			c.JSON(500, gin.H{"error": "query failed"})
+		}
+		return nil, false
+	}
+	viewer := models.User{}
+	if value, ok := c.Get("currentUser"); ok {
+		viewer, _ = value.(models.User)
+	}
+	privileged := viewer.UUID == target.UUID || util.UserInstance.HasPermission(viewer, "admin")
+	if !privileged && !target.ShowActivity {
+		c.JSON(403, gin.H{"error": "activity is private"})
+		return nil, false
+	}
+	query := uc.db.Table("submissions s").Joins("JOIN question q ON q.id=s.question_id").Where("s.user_id = ? AND s.verdict = ?", target.UUID, "AC")
+	if !privileged {
+		query = query.Where("q.status = ? AND s.is_public = ?", "published", true)
+	}
+	return query, true
+}
 func (uc *UserSolveController) Index(c *gin.Context) {
-	userID := c.Param("uuid")
-
-	var numbers []int
-	if err := uc.db.Table("user_solved_question usq").
-		Joins("JOIN question q ON q.id = usq.question_id").
-		Where("usq.user_uuid = ?", userID).
-		Order("usq.solved_at DESC").
-		Pluck("q.id", &numbers).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "query user solved list failed"})
+	query, ok := uc.query(c, c.Param("uuid"))
+	if !ok {
+		return
+	}
+	numbers := []int{}
+	if err := query.Distinct("s.question_id").Pluck("s.question_id", &numbers).Error; err != nil {
+		c.JSON(500, gin.H{"error": "query failed"})
 		return
 	}
 	c.JSON(http.StatusOK, numbers)
 }
-
-// GET /user/solve?uuid=&id=
 func (uc *UserSolveController) Show(c *gin.Context) {
-	uuid := strings.TrimSpace(c.Query("uuid"))
-	questionID := strings.TrimSpace(c.Query("id"))
-	if questionID == "" {
-		// backward compatibility
-		questionID = strings.TrimSpace(c.Query("question_number"))
+	uuid, id := strings.TrimSpace(c.Query("uuid")), strings.TrimSpace(c.Query("id"))
+	if id == "" {
+		id = strings.TrimSpace(c.Query("question_number"))
 	}
-	if uuid == "" || questionID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid user solve query"})
+	if uuid == "" || id == "" {
+		c.JSON(400, gin.H{"error": "invalid user solve query"})
 		return
 	}
-
-	var cnt int64
-	if err := uc.db.Table("user_solved_question usq").
-		Joins("JOIN question q ON q.id = usq.question_id").
-		Where("usq.user_uuid = ? AND q.id = ?", uuid, questionID).
-		Count(&cnt).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "query user solved detail failed"})
+	query, ok := uc.query(c, uuid)
+	if !ok {
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"solved": cnt > 0})
+	var count int64
+	if err := query.Where("q.id = ?", id).Count(&count).Error; err != nil {
+		c.JSON(500, gin.H{"error": "query failed"})
+		return
+	}
+	c.JSON(200, gin.H{"solved": count > 0})
 }

@@ -20,7 +20,7 @@ func newSubmissionQueryTestDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("open test db failed: %v", err)
 	}
-	if err := db.AutoMigrate(&models.Question{}, &models.Submission{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.Question{}, &models.Submission{}); err != nil {
 		t.Fatalf("migrate test db failed: %v", err)
 	}
 	return db
