@@ -7,6 +7,7 @@ import (
 	adminauth "patreonoj/internal/Controllers/auth"
 	adminlearning "patreonoj/internal/Controllers/learning"
 	adminquestion "patreonoj/internal/Controllers/question"
+	adminsite "patreonoj/internal/Controllers/site"
 	adminstorage "patreonoj/internal/Controllers/storage"
 	adminsubmission "patreonoj/internal/Controllers/submission"
 	admintestcase "patreonoj/internal/Controllers/testcase"
@@ -33,6 +34,11 @@ func RoutersInit(r *gin.Engine, ossClient *oss.OSS) func(context.Context) error 
 	testCaseCtrl := admintestcase.NewTestCaseController(models.DB, ossClient)
 
 	r.Use(middleware.LoadCurrentUser(models.DB))
+	siteCtrl := adminsite.NewController(models.DB, ossClient)
+	r.GET("/site/settings", siteCtrl.Get)
+	r.GET("/site/images/:name", siteCtrl.Image)
+	r.PUT("/site/settings", middleware.RequirePermission("admin"), siteCtrl.Update)
+	r.POST("/site/images", middleware.RequirePermission("admin"), siteCtrl.UploadImage)
 	r.GET("/healthz", func(c *gin.Context) {
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Second)
 		defer cancel()

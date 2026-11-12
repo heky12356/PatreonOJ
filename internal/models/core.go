@@ -112,6 +112,7 @@ func AutoMigrate() error {
 		&UserSkillMastery{},
 		&OjOverView{},
 		&Session{},
+		&SiteSettings{},
 		// 如果有其他模型，在这里添加
 	)
 	if err != nil {
