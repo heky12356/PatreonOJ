@@ -130,134 +130,118 @@ func (s *LearningService) uniqueVisibleQuestions() *gorm.DB {
 }
 
 func (s *LearningService) BuildQuestionGraph(questionPK int, depth int) (*QuestionGraphResult, error) {
-	if depth <= 0 {
-		depth = 2
-	}
-	if depth > 6 {
-		depth = 6
-	}
+	return s.BuildQuestionGraphLimited(questionPK, depth, 256, 20000)
+}
 
+// BuildQuestionGraphLimited loads question metadata once and uses indexed directional scans.
+func (s *LearningService) BuildQuestionGraphLimited(questionPK, depth, maxGraphNodes, maxGraphEdges int) (*QuestionGraphResult, error) {
+	depth = min(6, max(1, depth))
+	maxGraphNodes = min(256, max(1, maxGraphNodes))
+	maxGraphEdges = min(20000, max(1, maxGraphEdges))
+	const fields = "id, question_id, title, difficulty, tags, status"
 	var root models.Question
-	if err := s.visibleQuestions().Where("id = ?", questionPK).First(&root).Error; err != nil {
+	if err := s.visibleQuestions().Select(fields).Where("id = ?", questionPK).First(&root).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrLearningQuestionNotFound
 		}
 		return nil, err
 	}
-
-	rootID := strings.TrimSpace(root.QuestionId)
-	var sameID int64
-	if err := s.db.Model(&models.Question{}).Where("question_id = ?", root.QuestionId).Count(&sameID).Error; err != nil {
+	var duplicates int64
+	if err := s.db.Model(&models.Question{}).Where("question_id = ?", root.QuestionId).Count(&duplicates).Error; err != nil {
 		return nil, err
 	}
-	if sameID != 1 {
+	if duplicates != 1 {
 		return nil, ErrLearningAmbiguousQuestion
 	}
-	discovered := map[string]struct{}{rootID: {}}
+	var metadata []models.Question
+	if err := s.uniqueVisibleQuestions().Select(fields).Find(&metadata).Error; err != nil {
+		return nil, err
+	}
+	questionByID := make(map[string]models.Question, len(metadata))
+	for _, q := range metadata {
+		questionByID[q.QuestionId] = q
+	}
+	rootID := root.QuestionId
+	if _, ok := questionByID[rootID]; !ok {
+		return nil, ErrLearningQuestionNotFound
+	}
+	discovered := map[string]bool{rootID: true}
 	frontier := []string{rootID}
-	edgeSet := make(map[string]models.QuestionRelationEdge)
-	const maxGraphNodes, maxGraphEdges = 256, 20000
+	edgeSet := map[string]QuestionGraphEdge{}
 	truncated := false
-
-	for i := 0; i < depth && len(frontier) > 0; i++ {
-		var edges []models.QuestionRelationEdge
-		if err := s.db.Where("from_question_id IN ? OR to_question_id IN ?", frontier, frontier).Order("id ASC").Limit(maxGraphEdges + 1).Find(&edges).Error; err != nil {
-			return nil, err
-		}
-		if len(edges) > maxGraphEdges {
-			truncated = true
-			edges = edges[:maxGraphEdges]
-		}
-		endpoints := make(map[string]struct{})
-		for _, edge := range edges {
-			endpoints[edge.FromQuestionID] = struct{}{}
-			endpoints[edge.ToQuestionID] = struct{}{}
-		}
-		endpointIDs := mapKeys(endpoints)
-		var visibleIDs []string
-		for start := 0; start < len(endpointIDs); start += 500 {
-			var batch []string
-			if err := s.uniqueVisibleQuestions().Where("question_id IN ?", endpointIDs[start:min(start+500, len(endpointIDs))]).Pluck("question_id", &batch).Error; err != nil {
+	for level := 0; level < depth && len(frontier) > 0; level++ {
+		candidates := make([]models.QuestionRelationEdge, 0)
+		for _, direction := range []struct{ column, order string }{{"from_question_id", "from_question_id, edge_type, to_question_id"}, {"to_question_id", "to_question_id, edge_type, from_question_id"}} {
+			var batch []models.QuestionRelationEdge
+			if err := s.db.Select("from_question_id, to_question_id, edge_type").Where(direction.column+" IN ?", frontier).Order(direction.order).Limit(maxGraphEdges + 1).Find(&batch).Error; err != nil {
 				return nil, err
 			}
-			visibleIDs = append(visibleIDs, batch...)
+			if len(batch) > maxGraphEdges {
+				truncated = true
+				batch = batch[:maxGraphEdges]
+			}
+			candidates = append(candidates, batch...)
 		}
-		visible := make(map[string]bool, len(visibleIDs))
-		for _, id := range visibleIDs {
-			visible[id] = true
-		}
-
-		next := make(map[string]struct{})
-		for _, e := range edges {
-			if !visible[e.FromQuestionID] || !visible[e.ToQuestionID] {
+		sort.SliceStable(candidates, func(i, j int) bool {
+			ai, aj := candidates[i].EdgeType == models.QuestionRelationEdgeTypeSimilar, candidates[j].EdgeType == models.QuestionRelationEdgeTypeSimilar
+			if ai != aj {
+				return !ai
+			}
+			if candidates[i].FromQuestionID != candidates[j].FromQuestionID {
+				return candidates[i].FromQuestionID < candidates[j].FromQuestionID
+			}
+			return candidates[i].ToQuestionID < candidates[j].ToQuestionID
+		})
+		next := map[string]bool{}
+		for _, e := range candidates {
+			if !e.EdgeType.Valid() {
+				continue
+			}
+			if _, ok := questionByID[e.FromQuestionID]; !ok {
+				continue
+			}
+			if _, ok := questionByID[e.ToQuestionID]; !ok {
 				continue
 			}
 			key := string(e.EdgeType) + "|" + e.FromQuestionID + "|" + e.ToQuestionID
-			if _, exists := edgeSet[key]; !exists && len(edgeSet) >= maxGraphEdges {
+			if _, exists := edgeSet[key]; exists {
+				continue
+			}
+			if len(edgeSet) >= maxGraphEdges {
 				truncated = true
 				continue
 			}
 			additional := 0
 			for _, id := range []string{e.FromQuestionID, e.ToQuestionID} {
-				if _, known := discovered[id]; !known {
-					if _, queued := next[id]; !queued {
-						additional++
-					}
+				if !discovered[id] && !next[id] {
+					additional++
 				}
 			}
 			if len(discovered)+len(next)+additional > maxGraphNodes {
 				truncated = true
 				continue
 			}
-			edgeSet[key] = e
-
-			if _, ok := discovered[e.FromQuestionID]; !ok {
-				next[e.FromQuestionID] = struct{}{}
-			}
-			if _, ok := discovered[e.ToQuestionID]; !ok {
-				next[e.ToQuestionID] = struct{}{}
+			edgeSet[key] = QuestionGraphEdge{FromQuestionID: e.FromQuestionID, ToQuestionID: e.ToQuestionID, EdgeType: string(e.EdgeType)}
+			for _, id := range []string{e.FromQuestionID, e.ToQuestionID} {
+				if !discovered[id] {
+					next[id] = true
+				}
 			}
 		}
-
 		frontier = mapKeys(next)
-		for _, id := range frontier {
-			discovered[id] = struct{}{}
+		for id := range next {
+			discovered[id] = true
 		}
 	}
-
-	questionIDs := mapKeys(discovered)
-	questions := make([]models.Question, 0, len(questionIDs))
-	if len(questionIDs) > 0 {
-		if err := s.uniqueVisibleQuestions().Where("question_id IN ?", questionIDs).Find(&questions).Error; err != nil {
-			return nil, err
-		}
+	nodes := make([]QuestionGraphNode, 0, len(discovered))
+	for id := range discovered {
+		q := questionByID[id]
+		nodes = append(nodes, QuestionGraphNode{QuestionID: q.QuestionId, QuestionPK: q.Id, Title: q.Title, Difficulty: q.Difficulty, Tags: q.Tags})
 	}
-	questionByID := make(map[string]models.Question, len(questions))
-	for _, q := range questions {
-		questionByID[q.QuestionId] = q
-	}
-
-	nodes := make([]QuestionGraphNode, 0, len(questions))
-	for _, q := range questions {
-		nodes = append(nodes, QuestionGraphNode{
-			QuestionID: q.QuestionId,
-			QuestionPK: q.Id,
-			Title:      q.Title,
-			Difficulty: q.Difficulty,
-			Tags:       q.Tags,
-		})
-	}
-	sort.Slice(nodes, func(i, j int) bool {
-		return nodes[i].QuestionPK < nodes[j].QuestionPK
-	})
-
+	sort.Slice(nodes, func(i, j int) bool { return nodes[i].QuestionPK < nodes[j].QuestionPK })
 	edges := make([]QuestionGraphEdge, 0, len(edgeSet))
 	for _, e := range edgeSet {
-		edges = append(edges, QuestionGraphEdge{
-			FromQuestionID: e.FromQuestionID,
-			ToQuestionID:   e.ToQuestionID,
-			EdgeType:       string(e.EdgeType),
-		})
+		edges = append(edges, e)
 	}
 	sort.Slice(edges, func(i, j int) bool {
 		if edges[i].FromQuestionID != edges[j].FromQuestionID {
@@ -268,63 +252,44 @@ func (s *LearningService) BuildQuestionGraph(questionPK int, depth int) (*Questi
 		}
 		return edges[i].EdgeType < edges[j].EdgeType
 	})
-
-	tree := buildGraphTree(rootID, questionByID, edges)
-	return &QuestionGraphResult{
-		Truncated:      truncated,
-		RootQuestionID: root.QuestionId,
-		RootQuestionPK: root.Id,
-		Nodes:          nodes,
-		Edges:          edges,
-		Tree:           tree,
-	}, nil
+	return &QuestionGraphResult{RootQuestionID: rootID, RootQuestionPK: root.Id, Nodes: nodes, Edges: edges, Tree: buildGraphTree(rootID, questionByID, edges), Truncated: truncated}, nil
 }
 
 func buildGraphTree(rootID string, questionByID map[string]models.Question, edges []QuestionGraphEdge) *QuestionGraphTree {
-	adj := make(map[string][]QuestionGraphEdge)
-	for _, e := range edges {
-		adj[e.FromQuestionID] = append(adj[e.FromQuestionID], e)
-	}
-	for from := range adj {
-		sort.Slice(adj[from], func(i, j int) bool {
-			return adj[from][i].ToQuestionID < adj[from][j].ToQuestionID
-		})
-	}
-
-	used := make(map[string]struct{})
-	var build func(id string) *QuestionGraphTree
-	build = func(id string) *QuestionGraphTree {
+	makeNode := func(id string) *QuestionGraphTree {
 		q, ok := questionByID[id]
 		if !ok {
 			return nil
 		}
-		if _, exists := used[id]; exists {
-			return nil
-		}
-		used[id] = struct{}{}
-
-		node := &QuestionGraphTree{
-			QuestionID: q.QuestionId,
-			QuestionPK: q.Id,
-			Title:      q.Title,
-			Difficulty: q.Difficulty,
-			Tags:       q.Tags,
-			Children:   make([]QuestionGraphTreeChild, 0),
-		}
-		for _, e := range adj[id] {
-			child := build(e.ToQuestionID)
+		return &QuestionGraphTree{QuestionID: q.QuestionId, QuestionPK: q.Id, Title: q.Title, Difficulty: q.Difficulty, Tags: q.Tags, Children: []QuestionGraphTreeChild{}}
+	}
+	root := makeNode(rootID)
+	if root == nil {
+		return nil
+	}
+	adj := map[string][]QuestionGraphEdge{}
+	for _, edge := range edges {
+		adj[edge.FromQuestionID] = append(adj[edge.FromQuestionID], edge)
+	}
+	visited := map[string]bool{rootID: true}
+	queue := []*QuestionGraphTree{root}
+	for len(queue) > 0 {
+		node := queue[0]
+		queue = queue[1:]
+		for _, edge := range adj[node.QuestionID] {
+			if visited[edge.ToQuestionID] {
+				continue
+			}
+			child := makeNode(edge.ToQuestionID)
 			if child == nil {
 				continue
 			}
-			node.Children = append(node.Children, QuestionGraphTreeChild{
-				EdgeType: e.EdgeType,
-				Node:     child,
-			})
+			visited[edge.ToQuestionID] = true
+			node.Children = append(node.Children, QuestionGraphTreeChild{EdgeType: edge.EdgeType, Node: child})
+			queue = append(queue, child)
 		}
-		return node
 	}
-
-	return build(rootID)
+	return root
 }
 
 func mapKeys[T any](m map[string]T) []string {
@@ -856,7 +821,7 @@ func (s *LearningService) buildTagFallbackRecommendations(current models.Questio
 func splitTags(tags string) []string {
 	fields := strings.FieldsFunc(tags, func(r rune) bool {
 		switch r {
-		case ',', ';', '|', '/', '\\', ' ':
+		case ',', '，', ';', '；', '|', '/', '\\', ' ':
 			return true
 		default:
 			return false

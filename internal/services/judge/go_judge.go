@@ -75,6 +75,18 @@ func (c *GoJudgeClient) Run(code, language string, inputs []string, timeLimitMs,
 }
 
 func (c *GoJudgeClient) RunContext(ctx context.Context, code, language string, inputs []string, timeLimitMs, memoryLimitMB int64) ([]models.TestCaseResult, error) {
+	responses, err := c.execute(ctx, code, language, inputs, timeLimitMs, memoryLimitMB)
+	if err != nil {
+		return nil, err
+	}
+	results := make([]models.TestCaseResult, len(inputs))
+	for i, response := range responses {
+		results[i] = parseResult(response, inputs[i])
+	}
+	return results, nil
+}
+
+func (c *GoJudgeClient) execute(ctx context.Context, code, language string, inputs []string, timeLimitMs, memoryLimitMB int64) ([]CmdResponse, error) {
 	if len(inputs) == 0 {
 		return nil, errors.New("no test cases supplied")
 	}
@@ -119,14 +131,43 @@ func (c *GoJudgeClient) RunContext(ctx context.Context, code, language string, i
 	if err != nil {
 		return nil, err
 	}
-	results := make([]models.TestCaseResult, len(inputs))
-	for i, response := range responses {
+	for _, response := range responses {
 		if response.Status == "Internal Error" || response.Status == "File Error" {
 			return nil, fmt.Errorf("go-judge service error: %s %s", response.Status, response.Error)
 		}
-		results[i] = parseResult(response, inputs[i])
 	}
-	return results, nil
+	return responses, nil
+}
+
+type DebugResult struct {
+	Verdict    string `json:"verdict"`
+	Stdout     string `json:"stdout"`
+	Stderr     string `json:"stderr"`
+	RuntimeMS  int64  `json:"runtime_ms"`
+	MemoryKB   int64  `json:"memory_kb"`
+	ExitCode   int    `json:"exit_code"`
+	Comparison string `json:"comparison,omitempty"`
+}
+
+// DebugContext only executes user-provided input. It never loads judge data or updates progress.
+func (c *GoJudgeClient) DebugContext(ctx context.Context, code, language, input string, expected *string, timeMS, memoryMB int64) (*DebugResult, error) {
+	responses, err := c.execute(ctx, code, language, []string{input}, timeMS, memoryMB)
+	if err != nil {
+		return nil, err
+	}
+	r := responses[0]
+	verdict := parseResult(r, input).Verdict
+	if verdict == "AC" {
+		verdict = "OK"
+	}
+	result := &DebugResult{Verdict: verdict, Stdout: r.Files["stdout"], Stderr: r.Files["stderr"], RuntimeMS: int64(r.Time / 1000000), MemoryKB: int64(r.Memory / 1024), ExitCode: r.ExitStatus}
+	if expected != nil && verdict == "OK" {
+		result.Comparison = "mismatch"
+		if normalizeOutput(result.Stdout) == normalizeOutput(*expected) {
+			result.Comparison = "match"
+		}
+	}
+	return result, nil
 }
 
 func judgeFiles(input *string) []*CmdFile {

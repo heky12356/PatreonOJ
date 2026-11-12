@@ -7,7 +7,8 @@ RUN go mod download
 COPY . .
 RUN --mount=type=cache,target=/root/.cache/go-build go test -p 2 ./... && \
     go build -p 2 -trimpath -ldflags="-s -w" -o /out/patreonoj ./cmd/PatreonOJ && \
-    go build -p 2 -trimpath -ldflags="-s -w" -o /out/patreonoj-admin ./cmd/admin
+    go build -p 2 -trimpath -ldflags="-s -w" -o /out/patreonoj-admin ./cmd/admin && \
+    go build -p 2 -trimpath -ldflags="-s -w" -o /out/patreonoj-graph ./cmd/rebuild_graph
 
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl tzdata && \

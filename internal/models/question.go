@@ -1,9 +1,9 @@
-﻿package models
+package models
 
 type Question struct {
 	Id int `gorm:"primaryKey;autoIncrement" json:"id"`
 
-	QuestionId string `gorm:"type:varchar(64);not null" json:"question_id"`
+	QuestionId string `gorm:"type:varchar(64);not null;index:idx_question_business_id" json:"question_id"`
 
 	Title      string `gorm:"not null" json:"title"`
 	Content    string `gorm:"type:text" json:"content"`

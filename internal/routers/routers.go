@@ -5,6 +5,7 @@ import (
 	"net/http"
 	controllers "patreonoj/internal/Controllers"
 	adminauth "patreonoj/internal/Controllers/auth"
+	debugctrl "patreonoj/internal/Controllers/debug"
 	adminlearning "patreonoj/internal/Controllers/learning"
 	adminquestion "patreonoj/internal/Controllers/question"
 	adminsite "patreonoj/internal/Controllers/site"
@@ -16,6 +17,8 @@ import (
 	"patreonoj/internal/middleware"
 	"patreonoj/internal/models"
 	"patreonoj/internal/oss"
+	debugsvc "patreonoj/internal/services/debug"
+	"patreonoj/internal/services/judge"
 	questionsvc "patreonoj/internal/services/question"
 	"time"
 
@@ -34,6 +37,23 @@ func RoutersInit(r *gin.Engine, ossClient *oss.OSS) func(context.Context) error 
 	testCaseCtrl := admintestcase.NewTestCaseController(models.DB, ossClient)
 
 	r.Use(middleware.LoadCurrentUser(models.DB))
+	var debugRunner debugsvc.Runner
+	if config.GlobalConfig.Judge.GoJudge.Enabled {
+		client := judge.NewGoJudgeClient(config.GlobalConfig.Judge.GoJudge.APIURL, 120)
+		client.Token = config.GlobalConfig.Judge.GoJudge.Token
+		debugRunner = client
+	}
+	var sampleObjects debugsvc.ObjectStore
+	if ossClient != nil {
+		sampleObjects = ossClient
+	}
+	debugService := debugsvc.NewService(models.DB, debugRunner, sampleObjects, config.GlobalConfig.OSS.BucketName)
+	debugController := &debugctrl.Controller{Service: debugService}
+	r.GET("/question/:id/samples", debugController.Samples)
+	debugRouter := r.Group("/debug/runs").Use(middleware.RequireAuth())
+	debugRouter.POST("", debugController.Create)
+	debugRouter.GET("/:id", debugController.Get)
+	debugRouter.DELETE("/:id", debugController.Cancel)
 	siteCtrl := adminsite.NewController(models.DB, ossClient)
 	r.GET("/site/settings", siteCtrl.Get)
 	r.GET("/site/images/:name", siteCtrl.Image)
@@ -83,6 +103,8 @@ func RoutersInit(r *gin.Engine, ossClient *oss.OSS) func(context.Context) error 
 
 	learningRouter := r.Group("/learning")
 	{
+		learningRouter.GET("/tags", learningCtrl.Tags)
+		learningRouter.GET("/graph", learningCtrl.TagGraph)
 		learningRouter.GET("/users/:uuid/feedback", learningCtrl.GetUserFeedback)
 		learningRouter.GET("/users/:uuid/questions/:id/recommendations", learningCtrl.RecommendByQuestion)
 		learningRouter.GET("/questions/:id/graph", learningCtrl.GetQuestionGraph)
@@ -139,5 +161,11 @@ func RoutersInit(r *gin.Engine, ossClient *oss.OSS) func(context.Context) error 
 			ossRouter.GET("/files", ossCtrl.ListFiles)
 		}
 	}
-	return submissionCtrl.Shutdown
+	return func(ctx context.Context) error {
+		debugErr := debugService.Shutdown(ctx)
+		if err := submissionCtrl.Shutdown(ctx); err != nil {
+			return err
+		}
+		return debugErr
+	}
 }

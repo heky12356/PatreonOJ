@@ -4,11 +4,15 @@ import (
 	"errors"
 	"strconv"
 	"strings"
+	"sync"
 
+	"patreonoj/internal/graphcache"
 	"patreonoj/internal/models"
 
 	"gorm.io/gorm"
 )
+
+var mutationMu sync.Mutex
 
 var (
 	ErrQuestionRecordNotFound = errors.New("question not found")
@@ -143,6 +147,8 @@ func (s *QuestionService) ListNewestPublished(pageIdx, pageSize int) ([]models.Q
 }
 
 func (s *QuestionService) Create(input QuestionCreateInput) (*models.Question, error) {
+	mutationMu.Lock()
+	defer mutationMu.Unlock()
 	questionID := strings.TrimSpace(input.QuestionID)
 	if questionID == "" {
 		return nil, ErrQuestionIDRequired
@@ -181,6 +187,7 @@ func (s *QuestionService) Create(input QuestionCreateInput) (*models.Question, e
 		return nil, err
 	}
 
+	graphcache.Invalidate()
 	return &question, nil
 }
 
@@ -231,6 +238,8 @@ func (s *QuestionService) UpdateByID(id int, payload models.Question) (*models.Q
 }
 
 func (s *QuestionService) UpdateFieldsByID(id int, input QuestionUpdateInput) (*models.Question, error) {
+	mutationMu.Lock()
+	defer mutationMu.Unlock()
 	var existing models.Question
 	err := s.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Where("id = ?", id).First(&existing).Error; err != nil {
@@ -240,6 +249,7 @@ func (s *QuestionService) UpdateFieldsByID(id int, input QuestionUpdateInput) (*
 			return err
 		}
 		oldID := existing.QuestionId
+		oldTags, oldDifficulty, oldStatus := existing.Tags, existing.Difficulty, existing.Status
 		if input.QuestionID != nil {
 			existing.QuestionId = strings.TrimSpace(*input.QuestionID)
 		}
@@ -275,11 +285,15 @@ func (s *QuestionService) UpdateFieldsByID(id int, input QuestionUpdateInput) (*
 				return err
 			}
 		}
-		return refreshQuestionEdges(tx, existing.Id)
+		if oldID != existing.QuestionId || oldTags != existing.Tags || oldDifficulty != existing.Difficulty || oldStatus != existing.Status {
+			return refreshQuestionEdges(tx, existing.Id)
+		}
+		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
+	graphcache.Invalidate()
 	return &existing, nil
 }
 
@@ -288,6 +302,8 @@ func (s *QuestionService) UpdateByNumber(questionNumber int, payload models.Ques
 }
 
 func (s *QuestionService) DeleteByID(id int) error {
+	mutationMu.Lock()
+	defer mutationMu.Unlock()
 	var question models.Question
 	if err := s.db.Where("id = ?", id).First(&question).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -296,7 +312,7 @@ func (s *QuestionService) DeleteByID(id int) error {
 		return err
 	}
 
-	return s.db.Transaction(func(tx *gorm.DB) error {
+	err := s.db.Transaction(func(tx *gorm.DB) error {
 		if tx.Migrator().HasTable(&models.Submission{}) {
 			var pending int64
 			if err := tx.Model(&models.Submission{}).Where("question_id = ? AND status IN ?", question.Id, []string{"pending", "processing"}).Count(&pending).Error; err != nil {
@@ -317,6 +333,10 @@ func (s *QuestionService) DeleteByID(id int) error {
 		}
 		return tx.Delete(&question).Error
 	})
+	if err == nil {
+		graphcache.Invalidate()
+	}
+	return err
 }
 
 func (s *QuestionService) DeleteByNumber(questionNumber int) error {

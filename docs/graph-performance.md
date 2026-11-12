@@ -1,0 +1,88 @@
+# 题目图谱的性能与扩容
+
+## 先分清时间花在哪里
+
+一次打开图谱包含数据库查询、构图与 JSON 编码、网络传输、浏览器布局和绘制。公网耗时几秒，不能直接推断 SQL 也用了几秒。
+
+本次修改前，在 92 题的部署环境中测得：关系共 1,682 条，其中 `SIMILAR` 1,368 条；从服务器访问内部 API，两个三层图谱约 34–37 ms，返回 181–201 KB 的未压缩 JSON。相同请求从公网顺序访问约 1.5–1.7 秒。这只是当时的样本，不是延迟承诺。浏览器还需要运行力导向布局，用户看到的时间会更长。
+
+排查时先记录节点数、边数、响应字节数、TTFB、总耗时和浏览器 Performance。新接口提供 `Server-Timing: graph;dur=...` 和 `X-Graph-Cache: HIT/MISS`，其中 graph 时间只覆盖后端构图和缓存读取，不包含全部网络、鉴权、代理及浏览器耗时。
+
+```bash
+BASE_URL=https://oj.example.com
+curl --compressed -sS -D /tmp/graph-headers.txt \
+  -o /tmp/graph.json \
+  -w 'ttfb=%{time_starttransfer}s total=%{time_total}s transferred=%{size_download}B\n' \
+  "$BASE_URL/api/learning/questions/1/graph?depth=3"
+cat /tmp/graph-headers.txt
+```
+
+重复一次可以观察短缓存，但不要高并发灌生产环境。比较冷缓存时等待 15 秒或重启 API；注意区分原始 JSON 大小和压缩后的传输字节数。
+
+## 本次处理
+
+### 1. 控制建边规模
+
+原来任意两题标签重叠即可建立双向同类关系。如果 500 题都共享一个标签，就可能产生 `500 × 499 = 249,500` 条有向边。数据库索引只能加快检索，无法消除这些边的存储、编码、传输和绘制成本。
+
+现在按标签集合的 Jaccard 相似度排序，再参考难度差及稳定的题目顺序，选取少量候选。一次刷新每类最多选择 4 个邻居；自动 `SIMILAR` 出度最多 8，自动 `NEXT_LEVEL` 出度最多 8、入度最多 4。进阶关系要求标签严格包含，且难度方向合理。显式维护的关系不受这些自动额度限制。
+
+边增加来源字段：`manual` 为导入包显式关系，`auto` 为推断关系，`legacy` 为尚未分类的旧数据。刷新题目只重建自动关系；不能为了稀疏化而清空人工图谱。只修改题目正文、标题或运行限制时，不重建关系。
+
+自动边的存储量因此受每题邻居额度约束，约为 O(kN)。当前候选搜索仍扫描题目元数据，整批重建仍约为 O(N²)，不要将“边数线性”误解为“全部计算线性”。更多题目时可以建立规范化的题目标签关联表，通过标签倒排先找候选，再排序截断。当前自动关系属于启发式推荐，不代表经教师确认的教学先修关系。
+
+### 2. 查询和响应设预算
+
+- 原来已有 `(from_question_id, to_question_id, edge_type)` 唯一索引及单列索引；不是完全没有索引。
+- 增加出边覆盖索引 `(from_question_id, edge_type, to_question_id)`、入边覆盖索引 `(to_question_id, edge_type, from_question_id)`，分别查询两个方向，避免大 OR 查询与额外排序。题目业务编号也补充普通索引；继续显式拒绝存在歧义的重复编号。
+- 一次加载必要题目元数据，不加载正文，不在每层重复读取全部题目。BFS 按节点和边预算扩展；树也用 BFS，避免稠密关系形成很深的递归链。
+- 单题 HTTP 图谱最多 120 个节点、1,200 条边，截断时返回 `truncated: true`。
+- 标签入口精确匹配标签，只返回已发布、业务编号唯一的题目；默认每页 60 题，最大 120 题，只显示本页内部关系，最多 2,000 条边。分页子图不是整个标签的完整连通性证明。
+- 前端只在数据或关系筛选变化时计算布局，选择节点时仅改变样式。完整编号和长标题通过提示、详情展示，画布上的标签保持简短。
+
+### 3. 用有边界的进程缓存
+
+图谱是读多写少的数据，当前只有一个 API 实例，先使用进程内缓存即可：TTL 15 秒，最多 64 项、总计 8 MiB，单项最多 1 MiB。同一个 key 的并发读取合并为一次构图，失败不缓存。题目写入事务成功后更新缓存版本；管理员和公开图谱的 key 分开，避免草稿串入公开响应。HTTP 仍发送 `Cache-Control: no-store`，不把管理员响应交给外部共享缓存。
+
+命令行、直接 SQL 等在其他进程中改数据，无法通知当前进程的版本计数：维护后应重启 API；否则旧缓存最长保留 15 秒。API 多副本时也需要跨实例失效方案。
+
+## 是否需要中间件
+
+| 方案 | 适用条件 | 当前取舍 |
+| --- | --- | --- |
+| MySQL 索引、查询预算、稀疏建边 | 关系增长过快、扫描或响应过大 | 优先实施，直接减少工作量 |
+| 进程缓存与相同请求合并 | 单实例，图谱读多写少 | 已实施；占用和失效规则明确 |
+| Redis | 多个 API 副本要共享缓存，命中率和内存预算已测清 | 需要设计版本/失效通知后再加，不会自动解决错误建边 |
+| 消息队列/后台任务 | 批量导入和重建影响交互，需要持久任务、进度、重试 | 大批量时可加；当前仍应限速并避免无界队列 |
+| 图数据库 | 深层路径、复杂模式匹配成为主要业务，关系型方案经测量不足 | 目前按题邻接与有限 BFS 不需要迁移 |
+
+导入的基本顺序：校验和去重 → 低并发写入 → 建立有限关系 → 验证图谱与判题。不要用高并发掩盖建边耗时，也不要在生产里为了测试直接灌入几百道假题。
+
+## 旧关系的安全维护
+
+新数据库直接使用新策略。已有数据库必须先完整备份 MySQL；确认题目、测试数据、提交和用户记录的数量，并保留人工边清单。升级 API 后会自动迁移来源字段和索引，旧关系默认为 `legacy`，不会自动当作垃圾删除。
+
+镜像包含 `/app/patreonoj-graph`。以下命令默认只预演并回滚，`protected.json` 是私下保存的显式关系清单，格式为 `{"edges":[{"from":"1000","to":"1001","type":"NEXT_LEVEL"}]}`。文件必须能被容器 UID 10001 读取，不应提交生产数据或凭证到 Git。
+
+```bash
+# 已将人工边清单安全复制到容器 /tmp/protected.json 后：
+bash deploy/compose.sh exec -T api /app/patreonoj-graph \
+  -config /app/config.yaml -protected /tmp/protected.json -legacy-prefix PUB_
+```
+
+`-legacy-prefix` 只将指定导入编号范围内、符合旧标签规则、且不在人工清单中的关系分类为自动边。不能确认来源的旧边保留为 `legacy`。审阅报告中的 `before/after/protected/classified_legacy_auto/unclassified_legacy`，确认后在维护窗口停止题目写入，用相同命令加 `-apply`。应用后重启 API 并复查人工边、题目数及正式提交记录。数据量下降应仅发生在已分类的自动边中。
+
+## 可复现测试与局限
+
+```bash
+go test ./internal/services/question -run TestSparseGraph500 -v -count=1
+go test ./internal/Controllers/learning ./internal/graphcache ./internal/services/learning
+```
+
+500 题测试使用独立内存 SQLite，所有题目共享相同标签。一次开发机实测：自动边 2,000 条，重建约 3.4 秒；三层查询约 3.1 ms，13 个节点、42 条边、7,635 字节 JSON。测试约束边额度、响应上限和人工边保留，不设置依赖机器速度的延迟断言。这不是生产 MySQL 压测结果，也不代表各种标签分布都只返回这些节点。
+
+## 原始资料
+
+- [MySQL 8.4：多列索引及最左前缀](https://dev.mysql.com/doc/refman/8.4/en/multiple-column-indexes.html)
+- [Go singleflight：相同请求去重的接口与语义](https://pkg.go.dev/golang.org/x/sync/singleflight)；本项目使用同类合并机制，没有新增此依赖。
+- [Redis：容量上限与淘汰策略](https://redis.io/docs/latest/develop/reference/eviction/)

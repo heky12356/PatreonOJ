@@ -245,7 +245,7 @@ func importPack(ctx context.Context, db *gorm.DB, p pack, apply bool, put putObj
 			if !apply {
 				continue
 			}
-			rel := models.QuestionRelationEdge{FromQuestionID: e.From, ToQuestionID: e.To, EdgeType: e.Type}
+			rel := models.QuestionRelationEdge{FromQuestionID: e.From, ToQuestionID: e.To, EdgeType: e.Type, Source: "manual"}
 			result := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&rel)
 			if result.Error != nil {
 				return result.Error
