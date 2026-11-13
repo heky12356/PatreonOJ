@@ -72,6 +72,10 @@ func NewQuestionService(db *gorm.DB) *QuestionService {
 }
 
 func (s *QuestionService) List(q, difficult string, isAdmin bool, pageIdx, pageSize int) (*QuestionListResult, error) {
+	return s.ListFiltered(q, difficult, "", isAdmin, pageIdx, pageSize)
+}
+
+func (s *QuestionService) ListFiltered(q, difficult, tag string, isAdmin bool, pageIdx, pageSize int) (*QuestionListResult, error) {
 	query := strings.TrimSpace(q)
 	if query == "" {
 		query = "%"
@@ -99,6 +103,22 @@ func (s *QuestionService) List(q, difficult string, isAdmin bool, pageIdx, pageS
 	}
 
 	base := s.db.Model(&models.Question{}).Where("difficulty LIKE ? AND status LIKE ?", diff, status)
+	if tag = strings.ToLower(strings.TrimSpace(tag)); tag != "" {
+		// Match complete CSV tokens, including legacy separators. INSTR treats
+		// percent/underscore literally; user input never becomes SQL syntax.
+		normalized := "LOWER(COALESCE(tags, ''))"
+		args := make([]any, 0, 9)
+		for _, separator := range []string{"，", ";", "；", "|", "/", "\\", " "} {
+			normalized = "REPLACE(" + normalized + ", ?, ',')"
+			args = append(args, separator)
+		}
+		padded := "(',' || " + normalized + " || ',')"
+		if s.db.Dialector.Name() == "mysql" {
+			padded = "CONCAT(',', " + normalized + ", ',')"
+		}
+		args = append(args, ","+tag+",")
+		base = base.Where("INSTR("+padded+", ?) > 0", args...)
+	}
 	if query != "%" {
 		if queryHasNumber {
 			base = base.Where(

@@ -1,9 +1,11 @@
 package question
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -13,6 +15,43 @@ import (
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
+
+func TestIndexExactTagFilterAndInputLimit(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name())), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = db.AutoMigrate(&models.Question{}); err != nil {
+		t.Fatal(err)
+	}
+	rows := []models.Question{
+		{QuestionId: "A", Title: "sum", Tags: "数组,前缀和", Difficulty: "简单", Status: "published"},
+		{QuestionId: "B", Title: "sum", Tags: "二维数组", Difficulty: "简单", Status: "published"},
+		{QuestionId: "C", Title: "sum", Tags: "数组", Difficulty: "简单", Status: "draft"},
+	}
+	if err = db.Create(&rows).Error; err != nil {
+		t.Fatal(err)
+	}
+	r := gin.New()
+	r.GET("/question/", NewQuestionController(db, nil).Index)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest("GET", "/question/?"+url.Values{"tag": {"数组"}, "q": {"sum"}, "difficult": {"简单"}}.Encode(), nil))
+	var result struct {
+		Total int               `json:"totalCnt"`
+		Items []models.Question `json:"result"`
+	}
+	if err = json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if w.Code != 200 || result.Total != 1 || len(result.Items) != 1 || result.Items[0].QuestionId != "A" {
+		t.Fatalf("unexpected public filtered response: %d %s", w.Code, w.Body)
+	}
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest("GET", "/question/?tag="+url.QueryEscape(strings.Repeat("数", 129)), nil))
+	if w.Code != 400 {
+		t.Fatalf("oversized tag: %d", w.Code)
+	}
+}
 
 func TestShowMissingQuestionDoesNotPanic(t *testing.T) {
 	gin.SetMode(gin.TestMode)

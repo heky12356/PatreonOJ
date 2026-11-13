@@ -36,13 +36,18 @@ func (con *QuestionController) Index(c *gin.Context) {
 
 	q := c.DefaultQuery("q", "%")
 	difficult := c.DefaultQuery("difficult", "")
+	tag := strings.TrimSpace(c.Query("tag"))
+	if len([]rune(tag)) > 128 {
+		shared.APIError(c, http.StatusBadRequest, "tag is too long")
+		return
+	}
 	isAdmin := false
 	user, ok := c.Get("currentUser")
 	if ok {
 		isAdmin = util.UserInstance.HasPermission(user.(models.User), "admin")
 	}
 
-	result, err := con.service.List(q, difficult, isAdmin, pageIdx, pageSize)
+	result, err := con.service.ListFiltered(q, difficult, tag, isAdmin, pageIdx, pageSize)
 	if err != nil {
 		shared.APIError(c, http.StatusInternalServerError, "query question failed")
 		return
